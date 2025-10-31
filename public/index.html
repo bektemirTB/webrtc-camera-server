@@ -8,7 +8,7 @@
   <h2>📷 Камера включена</h2>
   <video id="video" autoplay playsinline></video>
   <script>
-    const socket = new WebSocket("wss://webrtc-camera-server.onrender.com");
+    const socket = io("https://webrtc-camera-server.onrender.com");
 
     const video = document.getElementById("video");
 
