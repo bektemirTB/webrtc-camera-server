@@ -3,47 +3,83 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Камера</title>
+  <title>Камера (умный режим)</title>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-  <h1>Камера включена</h1>
-  <video id="localVideo" autoplay playsinline></video>
+  <h1>📸 Камера в режиме ожидания</h1>
+  <video id="preview" autoplay playsinline></video>
+  <div id="status">Ожидание зрителя...</div>
 
   <script>
     const socket = io("https://webrtc-camera-server.onrender.com");
-    const video = document.getElementById("localVideo");
+    const roomId = "main-room";
+    const video = document.getElementById("preview");
+    const statusDiv = document.getElementById("status");
 
-    // Настраиваем видео с камеры
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      .then(stream => {
+    let stream = null;
+    const peerConnections = {};
+
+    socket.emit("join-room", { roomId, role: "camera" });
+
+    // Когда зритель подключается
+    socket.on("viewer-ready", async (viewerId) => {
+      statusDiv.textContent = "👁 Зритель подключился — включаю камеру...";
+      await startCamera(viewerId);
+    });
+
+    // Когда зритель уходит
+    socket.on("camera-stop", () => {
+      stopCamera();
+    });
+
+    async function startCamera(viewerId) {
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         video.srcObject = stream;
+      }
 
-        const peer = new RTCPeerConnection();
+      const pc = new RTCPeerConnection();
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-        stream.getTracks().forEach(track => peer.addTrack(track, stream));
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          socket.emit("ice-candidate", { roomId, candidate: e.candidate, target: viewerId });
+        }
+      };
 
-        peer.onicecandidate = e => {
-          if (e.candidate) socket.emit("ice-candidate", e.candidate);
-        };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit("offer", { roomId, offer, target: viewerId });
 
-        peer.createOffer()
-          .then(offer => peer.setLocalDescription(offer))
-          .then(() => socket.emit("offer", peer.localDescription));
+      peerConnections[viewerId] = pc;
+      statusDiv.textContent = "🎥 Трансляция активна";
+    }
 
-        socket.on("answer", async (answer) => {
-          await peer.setRemoteDescription(new RTCSessionDescription(answer));
-        });
+    function stopCamera() {
+      statusDiv.textContent = "⏸ Зрителей нет — камера выключена";
+      for (const id in peerConnections) {
+        peerConnections[id].close();
+        delete peerConnections[id];
+      }
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        video.srcObject = null;
+      }
+    }
 
-        socket.on("ice-candidate", async (candidate) => {
-          try {
-            await peer.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (err) {
-            console.error("Ошибка при добавлении ICE:", err);
-          }
-        });
-      })
-      .catch(err => console.error("Ошибка доступа к камере:", err));
+    socket.on("answer", async ({ answer, target }) => {
+      const pc = peerConnections[target];
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on("ice-candidate", async ({ candidate, target }) => {
+      const pc = peerConnections[target];
+      if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
+    socket.on("disconnect", stopCamera);
   </script>
 </body>
 </html>
