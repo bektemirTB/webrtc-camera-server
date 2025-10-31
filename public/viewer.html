@@ -3,60 +3,46 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Просмотр</title>
+  <title>Просмотр камеры</title>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-  <h1>👁️ Просмотр камеры</h1>
+  <h1>Просмотр камеры</h1>
   <video id="remoteVideo" autoplay playsinline></video>
-  <div id="status">⏳ Подключение...</div>
 
   <script>
     const socket = io("https://webrtc-camera-server.onrender.com");
-    const roomId = "main-room";
+    const roomId = "room1";
     const video = document.getElementById("remoteVideo");
-    const statusDiv = document.getElementById("status");
+    let peer;
 
-    let pc;
-
-    socket.on("connect", () => {
-      statusDiv.textContent = "✅ Зритель подключен к серверу";
-      socket.emit("join-room", { roomId, role: "viewer" });
-    });
-
-    socket.on("camera-ready", () => {
-      statusDiv.textContent = "📡 Камера онлайн, подключаемся...";
-    });
+    socket.emit("join-room", { roomId, role: "viewer" });
 
     socket.on("offer", async (offer) => {
-      statusDiv.textContent = "🎥 Получен поток, загружаем...";
-      pc = new RTCPeerConnection();
+      console.log("📡 Получен offer от камеры");
 
-      pc.ontrack = e => {
+      peer = new RTCPeerConnection();
+
+      peer.ontrack = e => {
+        console.log("🎥 Видео получено");
         video.srcObject = e.streams[0];
-        statusDiv.textContent = "✅ Видео получено!";
       };
 
-      pc.onicecandidate = e => {
-        if (e.candidate) socket.emit("ice-candidate", { roomId, candidate: e.candidate });
+      peer.onicecandidate = e => {
+        if (e.candidate) {
+          socket.emit("ice-candidate", { roomId, candidate: e.candidate });
+        }
       };
 
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      await peer.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
       socket.emit("answer", { roomId, answer });
     });
 
-    socket.on("ice-candidate", async (candidate) => {
-      if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
-    });
-
     socket.on("camera-disconnected", () => {
-      statusDiv.textContent = "❌ Камера отключена";
-      if (video.srcObject) {
-        video.srcObject.getTracks().forEach(t => t.stop());
-        video.srcObject = null;
-      }
+      console.log("❌ Камера отключилась");
+      video.srcObject = null;
     });
   </script>
 </body>
