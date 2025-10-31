@@ -59,20 +59,21 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-  console.log("❌ Отключился:", socket.id);
-  for (const roomId in rooms) {
-    const room = rooms[roomId];
-    if (room.camera === socket.id) {
-      io.to(roomId).emit("camera-disconnected");
-      delete rooms[roomId];
-    } else {
-      room.viewers = room.viewers.filter(v => v !== socket.id);
-      if (room.viewers.length === 0 && room.camera) {
-        io.to(room.camera).emit("camera-stop"); // 🚀 говорим камере выключиться
+    console.log("❌ Отключился:", socket.id);
+    for (const roomId in rooms) {
+      const room = rooms[roomId];
+      if (room.camera === socket.id) {
+        io.to(roomId).emit("camera-disconnected");
+        delete rooms[roomId];
+      } else {
+        room.viewers = room.viewers.filter(v => v !== socket.id);
+        if (room.viewers.length === 0 && room.camera) {
+          io.to(room.camera).emit("camera-stop"); // 🚀 говорим камере выключиться
+        }
       }
     }
-  }
-});
+  });
+}); // ← вот этой скобки не хватало!
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
