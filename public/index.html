@@ -2,41 +2,48 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Камера (WebRTC)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Камера</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-  <h2>📷 Камера включена</h2>
-  <video id="video" autoplay playsinline></video>
+  <h1>Камера включена</h1>
+  <video id="localVideo" autoplay playsinline></video>
+
   <script>
     const socket = io("https://webrtc-camera-server.onrender.com");
+    const video = document.getElementById("localVideo");
 
-    const video = document.getElementById("video");
-
+    // Настраиваем видео с камеры
     navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       .then(stream => {
         video.srcObject = stream;
-        const pc = new RTCPeerConnection();
-        stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-        pc.onicecandidate = event => {
-          if (event.candidate) {
-            socket.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
-          }
+        const peer = new RTCPeerConnection();
+
+        stream.getTracks().forEach(track => peer.addTrack(track, stream));
+
+        peer.onicecandidate = e => {
+          if (e.candidate) socket.emit("ice-candidate", e.candidate);
         };
 
-        pc.createOffer().then(offer => {
-          pc.setLocalDescription(offer);
-          socket.send(JSON.stringify({ type: "offer", offer }));
+        peer.createOffer()
+          .then(offer => peer.setLocalDescription(offer))
+          .then(() => socket.emit("offer", peer.localDescription));
+
+        socket.on("answer", async (answer) => {
+          await peer.setRemoteDescription(new RTCSessionDescription(answer));
         });
 
-        socket.onmessage = async event => {
-          const data = JSON.parse(event.data);
-          if (data.type === "answer") {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        socket.on("ice-candidate", async (candidate) => {
+          try {
+            await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.error("Ошибка при добавлении ICE:", err);
           }
-        };
+        });
       })
-      .catch(console.error);
+      .catch(err => console.error("Ошибка доступа к камере:", err));
   </script>
 </body>
 </html>

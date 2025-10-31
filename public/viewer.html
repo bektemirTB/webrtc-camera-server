@@ -2,37 +2,42 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Просмотр камеры</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-  <h2>🎥 Просмотр камеры</h2>
+  <h1>Просмотр камеры</h1>
   <video id="remoteVideo" autoplay playsinline></video>
+
   <script>
     const socket = io("https://webrtc-camera-server.onrender.com");
+    const video = document.getElementById("remoteVideo");
 
-    const pc = new RTCPeerConnection();
-    const remoteVideo = document.getElementById("remoteVideo");
+    const peer = new RTCPeerConnection();
 
-    pc.ontrack = event => {
-      remoteVideo.srcObject = event.streams[0];
+    peer.ontrack = e => {
+      video.srcObject = e.streams[0];
     };
 
-    socket.onmessage = async event => {
-      const data = JSON.parse(event.data);
+    peer.onicecandidate = e => {
+      if (e.candidate) socket.emit("ice-candidate", e.candidate);
+    };
 
-      if (data.type === "offer") {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.send(JSON.stringify({ type: "answer", answer }));
-      } else if (data.type === "candidate") {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (e) {
-          console.error("Ошибка добавления ICE:", e);
-        }
+    socket.on("offer", async (offer) => {
+      await peer.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      socket.emit("answer", peer.localDescription);
+    });
+
+    socket.on("ice-candidate", async (candidate) => {
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.error("Ошибка при добавлении ICE:", err);
       }
-    };
+    });
   </script>
 </body>
 </html>
