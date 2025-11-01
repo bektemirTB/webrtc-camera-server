@@ -28,6 +28,15 @@
     .connected { color: #4CAF50; }
     .disconnected { color: #f44336; }
     .waiting { color: #FFC107; }
+    #log {
+      max-height: 300px;
+      overflow-y: auto;
+      background: #222;
+      padding: 10px;
+      border-radius: 5px;
+      margin-top: 10px;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -37,24 +46,29 @@
   <div id="log"></div>
 
   <script>
-    const socket = io("https://webrtc-camera-server.onrender.com");
+    const socket = io("https://webrtc-camera-server.onrender.com", {
+      transports: ['websocket', 'polling']
+    });
     const roomId = "room1";
     const video = document.getElementById("remoteVideo");
     const statusDiv = document.getElementById("status");
     const logDiv = document.getElementById("log");
     let peer;
+    let iceCandidatesQueue = []; // Буфер для ICE candidates
+    let iceSentCount = 0;
+    let iceReceivedCount = 0;
 
     function log(msg) {
       console.log(msg);
       const time = new Date().toLocaleTimeString();
-      logDiv.innerHTML = `<div style="color: #888; font-size: 12px;">[${time}] ${msg}</div>` + logDiv.innerHTML;
+      logDiv.innerHTML = `<div style="color: #888;">[${time}] ${msg}</div>` + logDiv.innerHTML;
     }
 
     socket.on("connect", () => {
-      log("✅ Подключено к серверу");
+      log("✅ Подключено к серверу, Socket ID: " + socket.id);
       statusDiv.innerHTML = '<span class="connected">✅ Подключено к серверу</span>';
       socket.emit("join-room", { roomId, role: "viewer" });
-      log("📡 Присоединился к комнате: " + roomId);
+      log("📡 Отправлен join-room с ролью viewer");
       statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание камеры...</span>';
     });
 
@@ -63,17 +77,41 @@
       statusDiv.innerHTML = '<span class="disconnected">❌ Отключено от сервера</span>';
     });
 
-    socket.on("offer", async ({ offer, target }) => {
-      log("📥 Offer получен от камеры");
+    socket.on("offer", async (data) => {
+      log("📥 Событие offer получено");
+      log("📊 Данные: " + JSON.stringify(Object.keys(data)));
       
-      if (!offer) {
-        log("❌ Получен пустой offer");
-        console.error("❌ Получен пустой offer");
+      // Детальная проверка данных
+      if (!data) {
+        log("❌ data вообще нет!");
+        console.error("❌ data is null/undefined");
         return;
       }
 
+      const { offer, target } = data;
+      
+      log("📊 offer существует: " + (!!offer));
+      log("📊 target: " + target);
+      
+      if (!offer) {
+        log("❌ Получен пустой offer!");
+        log("❌ Полные данные события: " + JSON.stringify(data));
+        console.error("❌ Получен пустой offer, данные:", data);
+        return;
+      }
+
+      if (!offer.sdp) {
+        log("❌ Offer без SDP!");
+        log("❌ Offer: " + JSON.stringify(offer));
+        console.error("❌ Offer без SDP:", offer);
+        return;
+      }
+
+      log("✅ Offer валидный, тип: " + offer.type + ", длина SDP: " + offer.sdp.length);
+
       try {
         // Создаём PeerConnection
+        log("🔄 Создаю PeerConnection");
         peer = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -83,7 +121,7 @@
 
         // Получаем видео трек
         peer.ontrack = e => {
-          log("📺 Видео трек получен");
+          log("📺 Видео трек получен! Streams: " + e.streams.length);
           video.srcObject = e.streams[0];
           statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
         };
@@ -105,21 +143,52 @@
 
         peer.oniceconnectionstatechange = () => {
           log("🔗 ICE состояние: " + peer.iceConnectionState);
-          if (peer.iceConnectionState === 'failed') {
+          if (peer.iceConnectionState === 'connected') {
+            statusDiv.innerHTML = '<span class="connected">✅ Соединение установлено</span>';
+          } else if (peer.iceConnectionState === 'failed') {
             log("❌ ICE соединение не удалось");
             statusDiv.innerHTML = '<span class="disconnected">❌ Соединение не удалось</span>';
+          } else if (peer.iceConnectionState === 'disconnected') {
+            log("⚠️ ICE соединение разорвано");
+            statusDiv.innerHTML = '<span class="disconnected">⚠️ Соединение потеряно</span>';
           }
         };
 
+        peer.onconnectionstatechange = () => {
+          log("🔗 Connection состояние: " + peer.connectionState);
+        };
+
+        peer.onicegatheringstatechange = () => {
+          log("🧊 ICE gathering состояние: " + peer.iceGatheringState);
+        };
+
         // Устанавливаем remote description
+        log("🔄 Устанавливаю remote description");
         await peer.setRemoteDescription(new RTCSessionDescription(offer));
         log("✅ Remote description установлен");
 
+        // Обрабатываем накопленные ICE candidates
+        if (iceCandidatesQueue.length > 0) {
+          log(`📦 Обрабатываю ${iceCandidatesQueue.length} накопленных ICE candidates`);
+          for (const candidate of iceCandidatesQueue) {
+            try {
+              await peer.addIceCandidate(new RTCIceCandidate(candidate));
+              log("✅ Накопленный ICE candidate добавлен");
+            } catch (err) {
+              log("❌ Ошибка добавления накопленного ICE: " + err.message);
+            }
+          }
+          iceCandidatesQueue = [];
+        }
+
         // Создаём answer
+        log("🔄 Создаю answer");
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         
-        log("📡 Answer создан и отправлен камере");
+        log("✅ Answer создан, тип: " + answer.type + ", длина SDP: " + answer.sdp.length);
+        log("📡 Отправляю answer камере, target: " + target);
+        
         socket.emit("answer", { 
           answer: {
             type: answer.type,
@@ -127,6 +196,7 @@
           }, 
           target 
         });
+        log("✅ Answer отправлен");
 
         statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание видео...</span>';
       } catch (err) {
@@ -136,18 +206,28 @@
       }
     });
 
-    // ВАЖНО: Обрабатываем ICE кандидаты от камеры
     socket.on("ice-candidate", async ({ candidate, target }) => {
       log("🧊 ICE кандидат получен от камеры");
       
-      if (peer && candidate) {
-        try {
-          await peer.addIceCandidate(new RTCIceCandidate(candidate));
-          log("✅ ICE кандидат добавлен");
-        } catch (err) {
-          log("❌ Ошибка ICE: " + err.message);
-          console.error("Ошибка ICE:", err);
-        }
+      if (!candidate) {
+        log("❌ candidate пустой");
+        return;
+      }
+
+      // Если peer еще не создан или remote description не установлен, добавляем в очередь
+      if (!peer || !peer.remoteDescription) {
+        log("📦 Peer не готов, добавляю candidate в очередь");
+        iceCandidatesQueue.push(candidate);
+        return;
+      }
+      
+      // Иначе сразу добавляем
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+        log("✅ ICE кандидат добавлен");
+      } catch (err) {
+        log("❌ Ошибка ICE: " + err.message);
+        console.error("Ошибка ICE:", err);
       }
     });
 
@@ -161,10 +241,20 @@
       }
     });
 
-    // Обработка ошибок сокета
     socket.on("error", (error) => {
-      log("❌ Ошибка сокета: " + error);
+      log("❌ Ошибка сокета: " + JSON.stringify(error));
       console.error("Socket error:", error);
+    });
+
+    // Отладка: слушаем все события
+    socket.onAny((eventName, ...args) => {
+      log("📨 Событие получено: " + eventName);
+      if (eventName === "offer") {
+        log("📊 Offer args length: " + args.length);
+        if (args[0]) {
+          log("📊 Offer args[0] keys: " + Object.keys(args[0]).join(", "));
+        }
+      }
     });
   </script>
 </body>
