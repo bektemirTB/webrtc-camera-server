@@ -324,25 +324,34 @@
           
           // Добавляем аудио трек в peerConnection
           if (peerConnection) {
-            localStream.getAudioTracks().forEach(track => {
-              peerConnection.addTrack(track, localStream);
-              log("🎤 Трек добавлен");
-            });
+            const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'audio');
             
-            // Renegotiate
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            socket.emit("offer", { 
-              offer: { type: offer.type, sdp: offer.sdp },
-              originalId: myOriginalId
-            });
-            log("🔄 Renegotiate для микрофона");
+            if (sender) {
+              // Заменяем существующий трек
+              await sender.replaceTrack(localStream.getAudioTracks()[0]);
+              log("🎤 Аудио трек заменен");
+            } else {
+              // Добавляем новый трек
+              localStream.getAudioTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+                log("🎤 Аудио трек добавлен");
+              });
+              
+              // Renegotiate
+              const offer = await peerConnection.createOffer();
+              await peerConnection.setLocalDescription(offer);
+              socket.emit("offer", { 
+                offer: { type: offer.type, sdp: offer.sdp },
+                originalId: myOriginalId
+              });
+              log("🔄 Renegotiate для микрофона");
+            }
           }
           
           isMicActive = true;
           micButton.classList.add('active');
           micButton.innerHTML = '🔴 Говорю...';
-          log("✅ Микрофон включен");
+          log("✅ Микрофон включен - голос идет на камеру");
           
         } catch (err) {
           log("❌ Микрофон: " + err.message);
@@ -351,6 +360,16 @@
       } else {
         if (localStream) {
           localStream.getTracks().forEach(track => track.stop());
+          
+          // Удаляем трек из peerConnection
+          if (peerConnection) {
+            const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'audio');
+            if (sender) {
+              peerConnection.removeTrack(sender);
+              log("🔇 Аудио трек удален");
+            }
+          }
+          
           localStream = null;
         }
         

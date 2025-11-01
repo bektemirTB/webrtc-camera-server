@@ -559,12 +559,29 @@
       isViewerOnline = false;
       statusDiv.innerHTML = '<span class="waiting">⏸ Ожидание зрителя...</span>';
       
+      // ВАЖНО: Закрываем WebRTC соединение
       if (peerConnection) {
         peerConnection.close();
         peerConnection = null;
+        log("🔌 WebRTC соединение закрыто");
       }
       
-      log("📴 Зритель офлайн");
+      // Останавливаем камеру для экономии батареи
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        video.srcObject = null;
+        log("📷 Камера остановлена (зритель офлайн)");
+      }
+      
+      // Освобождаем Wake Lock
+      if (wakeLock) {
+        wakeLock.release();
+        wakeLock = null;
+        log("🔓 Wake Lock освобожден");
+      }
+      
+      log("📴 Зритель офлайн - камера остановлена");
     });
 
     socket.on("answer", async ({ answer }) => {

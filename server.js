@@ -125,7 +125,7 @@ io.on("connection", (socket) => {
       pairedWith: cameraOriginalId, 
       roomId,
       role: "viewer",
-      cameraOnline: false // Камера пока не онлайн
+      cameraOnline: !!codeData.cameraSocketId // Проверяем онлайн ли камера
     });
 
     // Уведомляем камеру (если она онлайн)
@@ -138,6 +138,9 @@ io.on("connection", (socket) => {
       
       // Сообщаем зрителю что камера онлайн
       socket.emit("camera-online");
+      console.log(`📹 Камера ${cameraOriginalId} онлайн, зритель ${originalId} уведомлен`);
+    } else {
+      console.log(`📴 Камера ${cameraOriginalId} офлайн`);
     }
 
     console.log(`✅ Пара создана: камера ${cameraOriginalId} ↔ зритель ${originalId}`);
@@ -180,13 +183,17 @@ io.on("connection", (socket) => {
     );
 
     if (partnerSocketId) {
-      // Партнер онлайн
-      io.to(partnerSocketId).emit("partner-online", originalId);
-      
+      // Партнер онлайн - уведомляем обоих
       if (role === "viewer") {
+        // Зритель подключился
+        io.to(partnerSocketId).emit("viewer-online", originalId);
         socket.emit("camera-online");
+        console.log(`✅ Зритель ${originalId} подключился, камера ${pairedWith} уведомлена`);
       } else {
+        // Камера подключилась
+        io.to(partnerSocketId).emit("camera-online", originalId);
         socket.emit("viewer-online");
+        console.log(`✅ Камера ${originalId} подключилась, зритель ${pairedWith} уведомлен`);
       }
       
       console.log(`✅ Оба в паре онлайн: ${originalId} ↔ ${pairedWith}`);
@@ -194,10 +201,11 @@ io.on("connection", (socket) => {
       // Партнер офлайн
       if (role === "viewer") {
         socket.emit("camera-offline");
+        console.log(`📴 Камера ${pairedWith} офлайн`);
       } else {
         socket.emit("viewer-offline");
+        console.log(`📴 Зритель ${pairedWith} офлайн`);
       }
-      console.log(`📴 Партнер ${pairedWith} офлайн`);
     }
 
     console.log(`✅ Соединение восстановлено: ${originalId} (${role}) ↔ ${pairedWith}`);
