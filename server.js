@@ -17,7 +17,7 @@ io.on("connection", (socket) => {
 
   socket.on("join-room", ({ roomId, role }) => {
     socket.join(roomId);
-    console.log(`${role} вошёл в комнату: ${roomId}`);
+    console.log(`✅ ${role} вошёл в комнату: ${roomId}, ID: ${socket.id}`);
 
     if (!rooms[roomId]) {
       rooms[roomId] = { camera: null, viewers: [] };
@@ -25,55 +25,116 @@ io.on("connection", (socket) => {
 
     if (role === "camera") {
       rooms[roomId].camera = socket.id;
+      console.log(`📹 Камера установлена для комнаты ${roomId}`);
       io.to(roomId).emit("camera-ready");
     } else if (role === "viewer") {
       rooms[roomId].viewers.push(socket.id);
+      console.log(`👁 Зритель добавлен, всего зрителей: ${rooms[roomId].viewers.length}`);
       if (rooms[roomId].camera) {
+        console.log(`📡 Отправляю viewer-ready камере ${rooms[roomId].camera}, зритель: ${socket.id}`);
         io.to(rooms[roomId].camera).emit("viewer-ready", socket.id);
+      } else {
+        console.log(`⚠️ Камера еще не подключена к комнате ${roomId}`);
       }
     }
   });
 
-  socket.on("offer", ({ roomId, offer, target }) => {
-    if (target) {
-      io.to(target).emit("offer", offer);
-    } else {
-      socket.to(roomId).emit("offer", offer);
+  // ИСПРАВЛЕНО: Передаем offer с правильной структурой
+  socket.on("offer", ({ offer, target }) => {
+    console.log(`📥 Получен offer от ${socket.id} для ${target}`);
+    console.log(`📊 Offer type: ${offer?.type}, SDP length: ${offer?.sdp?.length}`);
+    
+    if (!offer) {
+      console.error("❌ ОШИБКА: offer пустой!");
+      return;
     }
+    
+    if (!target) {
+      console.error("❌ ОШИБКА: target не указан!");
+      return;
+    }
+    
+    // КРИТИЧНО: отправляем объект с offer И target (sender - это ID камеры)
+    io.to(target).emit("offer", { offer, target: socket.id });
+    console.log(`✅ Offer переслан зрителю ${target} от камеры ${socket.id}`);
   });
 
-  socket.on("answer", ({ roomId, answer, target }) => {
-    if (target) {
-      io.to(target).emit("answer", answer);
-    } else {
-      socket.to(roomId).emit("answer", answer);
+  // ИСПРАВЛЕНО: Передаем answer с правильной структурой
+  socket.on("answer", ({ answer, target }) => {
+    console.log(`📥 Получен answer от ${socket.id} для ${target}`);
+    console.log(`📊 Answer type: ${answer?.type}, SDP length: ${answer?.sdp?.length}`);
+    
+    if (!answer) {
+      console.error("❌ ОШИБКА: answer пустой!");
+      return;
     }
+    
+    if (!target) {
+      console.error("❌ ОШИБКА: target не указан!");
+      return;
+    }
+    
+    // Отправляем объект с answer И target (sender - это ID зрителя)
+    io.to(target).emit("answer", { answer, target: socket.id });
+    console.log(`✅ Answer переслан камере ${target} от зрителя ${socket.id}`);
   });
 
-  socket.on("ice-candidate", ({ roomId, candidate, target }) => {
-    if (target) {
-      io.to(target).emit("ice-candidate", candidate);
-    } else {
-      socket.to(roomId).emit("ice-candidate", candidate);
+  // ИСПРАВЛЕНО: Передаем ICE candidate с правильной структурой
+  socket.on("ice-candidate", ({ candidate, target }) => {
+    console.log(`📥 Получен ICE candidate от ${socket.id} для ${target}`);
+    
+    if (!candidate) {
+      console.error("❌ ОШИБКА: candidate пустой!");
+      return;
     }
+    
+    if (!target) {
+      console.error("❌ ОШИБКА: target не указан!");
+      return;
+    }
+    
+    // Отправляем объект с candidate И target
+    io.to(target).emit("ice-candidate", { candidate, target: socket.id });
+    console.log(`✅ ICE candidate переслан ${target} от ${socket.id}`);
   });
 
   socket.on("disconnect", () => {
     console.log("❌ Отключился:", socket.id);
+    
     for (const roomId in rooms) {
       const room = rooms[roomId];
+      
+      // Если отключилась камера
       if (room.camera === socket.id) {
+        console.log(`📹 Камера отключилась от комнаты ${roomId}`);
         io.to(roomId).emit("camera-disconnected");
-        delete rooms[roomId];
-      } else {
-        room.viewers = room.viewers.filter(v => v !== socket.id);
-        if (room.viewers.length === 0 && room.camera) {
-          io.to(room.camera).emit("camera-stop"); // 🚀 говорим камере выключиться
+        
+        // Удаляем комнату, если нет зрителей
+        if (room.viewers.length === 0) {
+          delete rooms[roomId];
+          console.log(`🗑 Комната ${roomId} удалена (нет зрителей)`);
+        } else {
+          room.camera = null;
+          console.log(`⏸ Комната ${roomId} ожидает новую камеру`);
+        }
+      } 
+      // Если отключился зритель
+      else {
+        const viewerIndex = room.viewers.indexOf(socket.id);
+        if (viewerIndex !== -1) {
+          room.viewers.splice(viewerIndex, 1);
+          console.log(`👁 Зритель отключился, осталось: ${room.viewers.length}`);
+          
+          // Если больше нет зрителей, говорим камере выключиться
+          if (room.viewers.length === 0 && room.camera) {
+            console.log(`🛑 Нет зрителей, отправляю camera-stop камере ${room.camera}`);
+            io.to(room.camera).emit("camera-stop");
+          }
         }
       }
     }
   });
-}); // ← вот этой скобки не хватало!
+});
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
