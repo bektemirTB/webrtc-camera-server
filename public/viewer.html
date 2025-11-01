@@ -40,6 +40,8 @@
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       socket.emit("answer", { answer, target });
+
+      console.log("✅ Answer отправлен камере");
     });
 
     socket.on("camera-disconnected", () => {

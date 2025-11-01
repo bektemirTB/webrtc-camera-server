@@ -19,9 +19,11 @@
 
     socket.emit("join-room", { roomId, role: "camera" });
 
+    // Когда появляется новый зритель
     socket.on("viewer-ready", async (viewerId) => {
       console.log("👁 Зритель подключился:", viewerId);
 
+      // Получаем доступ к камере только один раз
       if (!stream) {
         try {
           stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -32,8 +34,8 @@
         }
       }
 
+      // Создаём PeerConnection для этого зрителя
       const pc = new RTCPeerConnection();
-
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       pc.onicecandidate = e => {
@@ -45,18 +47,22 @@
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
+      console.log("📡 Offer отправлен зрителю:", viewerId);
       socket.emit("offer", { offer, target: viewerId });
 
       peerConnections[viewerId] = pc;
     });
 
+    // Получаем answer от зрителя
     socket.on("answer", async ({ answer, target }) => {
       const pc = peerConnections[target];
       if (pc && answer) {
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log("✅ Answer получен от зрителя:", target);
       }
     });
 
+    // Получаем ICE кандидаты от зрителя
     socket.on("ice-candidate", async ({ candidate, target }) => {
       const pc = peerConnections[target];
       if (pc && candidate) {
@@ -68,6 +74,7 @@
       }
     });
 
+    // Отключаем камеру, если зрителей нет
     socket.on("camera-stop", () => {
       console.log("🛑 Зрителей нет — камера выключается");
       for (const id in peerConnections) {
