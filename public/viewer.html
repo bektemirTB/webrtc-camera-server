@@ -15,9 +15,11 @@
     video {
       width: 100%;
       max-width: 640px;
+      min-height: 240px;
       border: 2px solid #2196F3;
       border-radius: 8px;
       background: black;
+      display: block;
     }
     .status {
       margin: 10px 0;
@@ -42,7 +44,7 @@
 <body>
   <h1>👁 Просмотр камеры</h1>
   <div class="status" id="status">Подключение к серверу...</div>
-  <video id="remoteVideo" autoplay playsinline></video>
+  <video id="remoteVideo" autoplay playsinline muted controls></video>
   <div id="log"></div>
 
   <script>
@@ -57,6 +59,28 @@
     let iceCandidatesQueue = []; // Буфер для ICE candidates
     let iceSentCount = 0;
     let iceReceivedCount = 0;
+
+    // Обработчики событий видео для диагностики
+    video.onloadedmetadata = () => {
+      log("📹 Метаданные видео загружены");
+      log("📹 Размер видео: " + video.videoWidth + "x" + video.videoHeight);
+    };
+
+    video.onloadeddata = () => {
+      log("📹 Данные видео загружены");
+    };
+
+    video.onplay = () => {
+      log("▶️ Видео начало воспроизведение");
+    };
+
+    video.onplaying = () => {
+      log("▶️ Видео воспроизводится");
+    };
+
+    video.onerror = (e) => {
+      log("❌ Ошибка видео элемента: " + e);
+    };
 
     function log(msg) {
       console.log(msg);
@@ -122,14 +146,30 @@
         // Получаем видео трек
         peer.ontrack = e => {
           log("📺 Видео трек получен! Streams: " + e.streams.length);
-          video.srcObject = e.streams[0];
-          statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
+          const stream = e.streams[0];
+          video.srcObject = stream;
+          
+          log("📹 Stream ID: " + stream.id);
+          log("📹 Треков в stream: " + stream.getTracks().length);
+          stream.getTracks().forEach(track => {
+            log("📹 Track: " + track.kind + ", enabled: " + track.enabled + ", readyState: " + track.readyState);
+          });
+          
+          // Пытаемся запустить видео
+          video.play().then(() => {
+            log("✅ Видео воспроизводится!");
+            statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
+          }).catch(err => {
+            log("❌ Ошибка воспроизведения: " + err.message);
+            statusDiv.innerHTML = '<span class="disconnected">❌ Ошибка воспроизведения видео</span>';
+          });
         };
 
         // Отправляем ICE кандидаты
         peer.onicecandidate = e => {
           if (e.candidate) {
-            log("🧊 ICE кандидат отправлен камере");
+            iceSentCount++;
+            log(`🧊 ICE кандидат #${iceSentCount} отправлен камере`);
             socket.emit("ice-candidate", { 
               candidate: {
                 candidate: e.candidate.candidate,
@@ -138,6 +178,8 @@
               }, 
               target 
             });
+          } else {
+            log(`✅ Все ICE кандидаты собраны (всего отправлено: ${iceSentCount})`);
           }
         };
 
@@ -207,7 +249,8 @@
     });
 
     socket.on("ice-candidate", async ({ candidate, target }) => {
-      log("🧊 ICE кандидат получен от камеры");
+      iceReceivedCount++;
+      log(`🧊 ICE кандидат #${iceReceivedCount} получен от камеры`);
       
       if (!candidate) {
         log("❌ candidate пустой");
@@ -216,7 +259,7 @@
 
       // Если peer еще не создан или remote description не установлен, добавляем в очередь
       if (!peer || !peer.remoteDescription) {
-        log("📦 Peer не готов, добавляю candidate в очередь");
+        log(`📦 Peer не готов, добавляю candidate #${iceReceivedCount} в очередь (всего в очереди: ${iceCandidatesQueue.length + 1})`);
         iceCandidatesQueue.push(candidate);
         return;
       }
@@ -224,7 +267,7 @@
       // Иначе сразу добавляем
       try {
         await peer.addIceCandidate(new RTCIceCandidate(candidate));
-        log("✅ ICE кандидат добавлен");
+        log(`✅ ICE кандидат #${iceReceivedCount} добавлен`);
       } catch (err) {
         log("❌ Ошибка ICE: " + err.message);
         console.error("Ошибка ICE:", err);
