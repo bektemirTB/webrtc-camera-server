@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Просмотр камеры</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#2196F3">
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <style>
     body {
@@ -11,76 +13,207 @@
       padding: 20px;
       background: #1a1a1a;
       color: white;
+      margin: 0;
     }
+    .screen {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .hidden { display: none; }
+    
+    .code-input {
+      text-align: center;
+      margin: 2rem 0;
+    }
+    
+    .code-input input {
+      font-size: 2.5rem;
+      font-weight: bold;
+      padding: 1rem 2rem;
+      background: #333;
+      border: 2px solid #2196F3;
+      border-radius: 12px;
+      color: white;
+      text-align: center;
+      letter-spacing: 0.5rem;
+      font-family: 'Courier New', monospace;
+      width: 100%;
+      max-width: 300px;
+    }
+    
+    .paired-info {
+      background: #1a3a52;
+      padding: 1.5rem;
+      border-radius: 8px;
+      margin: 1rem 0;
+      border: 2px solid #2196F3;
+    }
+    
+    .paired-info h3 {
+      margin: 0 0 1rem 0;
+      color: #2196F3;
+    }
+    
     video {
       width: 100%;
-      max-width: 640px;
       min-height: 240px;
       border: 2px solid #2196F3;
       border-radius: 8px;
       background: black;
       display: block;
     }
+    
     .status {
       margin: 10px 0;
       padding: 10px;
       background: #333;
       border-radius: 5px;
     }
+    
     .connected { color: #4CAF50; }
     .disconnected { color: #f44336; }
     .waiting { color: #FFC107; }
+    
+    button {
+      padding: 1rem 2rem;
+      font-size: 1.1rem;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      background: linear-gradient(135deg, #2196F3, #1976D2);
+      color: white;
+      font-weight: 600;
+      width: 100%;
+      margin: 0.5rem 0;
+    }
+    
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    button.secondary { background: linear-gradient(135deg, #666, #555); }
+    button.danger { background: linear-gradient(135deg, #f44336, #d32f2f); }
+    
+    .voice-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    
+    .mic-button.active {
+      background: linear-gradient(135deg, #f44336, #d32f2f);
+      animation: pulse 1s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    
+    .instructions {
+      background: #333;
+      padding: 1.5rem;
+      border-radius: 8px;
+      margin: 1rem 0;
+    }
+    
     #log {
-      max-height: 300px;
+      max-height: 200px;
       overflow-y: auto;
       background: #222;
       padding: 10px;
       border-radius: 5px;
       margin-top: 10px;
-      font-size: 12px;
+      font-size: 11px;
     }
   </style>
 </head>
 <body>
-  <h1>👁 Просмотр камеры</h1>
-  <div class="status" id="status">Подключение к серверу...</div>
-  <video id="remoteVideo" autoplay playsinline muted controls></video>
-  <div id="log"></div>
+  <!-- Экран проверки пары -->
+  <div id="checkScreen" class="screen">
+    <h1>👁 Просмотр Камеры</h1>
+    
+    <div class="instructions">
+      <h3>Загрузка...</h3>
+      <p>Проверяем сохраненную пару...</p>
+    </div>
+  </div>
+
+  <!-- Экран ввода кода -->
+  <div id="codeScreen" class="screen hidden">
+    <h1>👁 Просмотр Камеры</h1>
+    
+    <div class="instructions">
+      <h3>Введите код подключения</h3>
+      <p>Получите 4-значный код от камеры. Код действителен 5 минут.</p>
+    </div>
+    
+    <div class="code-input">
+      <input 
+        type="text" 
+        id="codeInput" 
+        maxlength="4" 
+        placeholder="0000"
+        pattern="[0-9]*"
+        inputmode="numeric"
+      />
+    </div>
+    
+    <button onclick="connectWithCode()" id="connectBtn">🔗 Подключиться</button>
+  </div>
+
+  <!-- Экран просмотра -->
+  <div id="viewerScreen" class="screen hidden">
+    <h1>👁 Просмотр камеры</h1>
+    
+    <div class="paired-info">
+      <h3>✅ Пара активна</h3>
+      <p><strong>ID камеры:</strong> <span id="pairId" style="font-family: monospace;">---</span></p>
+      <button class="danger" onclick="confirmBreakPair()">💔 Разорвать пару</button>
+    </div>
+    
+    <div class="status" id="status">Подключение...</div>
+    
+    <video id="remoteVideo" autoplay playsinline controls></video>
+    
+    <div class="voice-controls">
+      <button id="micButton" class="mic-button" onclick="toggleMicrophone()">
+        🎤 Говорить
+      </button>
+      <button onclick="toggleMute()">
+        <span id="muteIcon">🔊</span> <span id="muteText">Звук</span>
+      </button>
+    </div>
+    
+    <div style="margin-top: 1rem;">
+      <button class="secondary" onclick="disconnect()">❌ Отключиться</button>
+    </div>
+    
+    <div id="log"></div>
+  </div>
 
   <script>
     const socket = io("https://webrtc-camera-server.onrender.com", {
       transports: ['websocket', 'polling']
     });
-    const roomId = "room1";
+    
+    const checkScreen = document.getElementById("checkScreen");
+    const codeScreen = document.getElementById("codeScreen");
+    const viewerScreen = document.getElementById("viewerScreen");
+    const codeInput = document.getElementById("codeInput");
     const video = document.getElementById("remoteVideo");
     const statusDiv = document.getElementById("status");
     const logDiv = document.getElementById("log");
-    let peer;
-    let iceCandidatesQueue = []; // Буфер для ICE candidates
-    let iceSentCount = 0;
-    let iceReceivedCount = 0;
-
-    // Обработчики событий видео для диагностики
-    video.onloadedmetadata = () => {
-      log("📹 Метаданные видео загружены");
-      log("📹 Размер видео: " + video.videoWidth + "x" + video.videoHeight);
-    };
-
-    video.onloadeddata = () => {
-      log("📹 Данные видео загружены");
-    };
-
-    video.onplay = () => {
-      log("▶️ Видео начало воспроизведение");
-    };
-
-    video.onplaying = () => {
-      log("▶️ Видео воспроизводится");
-    };
-
-    video.onerror = (e) => {
-      log("❌ Ошибка видео элемента: " + e);
-    };
+    const pairIdSpan = document.getElementById("pairId");
+    const micButton = document.getElementById("micButton");
+    const muteIcon = document.getElementById("muteIcon");
+    const muteText = document.getElementById("muteText");
+    
+    let peerConnection;
+    let localStream;
+    let pairedWith = null;
+    let roomId = null;
+    let isMicActive = false;
 
     function log(msg) {
       console.log(msg);
@@ -88,217 +221,318 @@
       logDiv.innerHTML = `<div style="color: #888;">[${time}] ${msg}</div>` + logDiv.innerHTML;
     }
 
+    // Загрузка сохраненной пары
+    function loadSavedPair() {
+      const saved = localStorage.getItem('viewerPair');
+      if (saved) {
+        try {
+          const data = JSON.parse(saved);
+          pairedWith = data.pairedWith;
+          log("💾 Загружена сохраненная пара: " + pairedWith);
+          return true;
+        } catch (e) {
+          localStorage.removeItem('viewerPair');
+        }
+      }
+      return false;
+    }
+
+    // Сохранение пары
+    function savePair(cameraId) {
+      localStorage.setItem('viewerPair', JSON.stringify({
+        pairedWith: cameraId,
+        createdAt: Date.now()
+      }));
+      log("💾 Пара сохранена");
+    }
+
+    // Удаление пары
+    function clearPair() {
+      localStorage.removeItem('viewerPair');
+      pairedWith = null;
+      roomId = null;
+      log("🗑 Пара удалена");
+    }
+
+    // Проверка при загрузке
     socket.on("connect", () => {
-      log("✅ Подключено к серверу, Socket ID: " + socket.id);
-      statusDiv.innerHTML = '<span class="connected">✅ Подключено к серверу</span>';
-      socket.emit("join-room", { roomId, role: "viewer" });
-      log("📡 Отправлен join-room с ролью viewer");
-      statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание камеры...</span>';
+      log("✅ Подключено к серверу: " + socket.id);
+      
+      if (loadSavedPair()) {
+        log("🔄 Восстановление соединения...");
+        socket.emit("restore-connection", { pairedWith });
+      } else {
+        log("📝 Нет сохраненной пары");
+        showCodeScreen();
+      }
     });
 
-    socket.on("disconnect", () => {
-      log("❌ Отключено от сервера");
-      statusDiv.innerHTML = '<span class="disconnected">❌ Отключено от сервера</span>';
+    function showCodeScreen() {
+      checkScreen.classList.add('hidden');
+      codeScreen.classList.remove('hidden');
+    }
+
+    // Автозаполнение кода
+    codeInput.addEventListener('input', (e) => {
+      e.target.value = e.target.value.replace(/[^0-9]/g, '');
     });
 
-    socket.on("offer", async (data) => {
-      log("📥 Событие offer получено");
-      log("📊 Данные: " + JSON.stringify(Object.keys(data)));
+    codeInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && codeInput.value.length === 4) {
+        connectWithCode();
+      }
+    });
+
+    // Подключение по коду
+    function connectWithCode() {
+      const code = codeInput.value.trim();
       
-      // Детальная проверка данных
-      if (!data) {
-        log("❌ data вообще нет!");
-        console.error("❌ data is null/undefined");
+      if (code.length !== 4) {
+        alert("Введите 4-значный код");
         return;
       }
-
-      const { offer, target } = data;
       
-      log("📊 offer существует: " + (!!offer));
-      log("📊 target: " + target);
+      log("🔑 Подключение с кодом: " + code);
+      socket.emit("connect-with-code", { code });
       
-      if (!offer) {
-        log("❌ Получен пустой offer!");
-        log("❌ Полные данные события: " + JSON.stringify(data));
-        console.error("❌ Получен пустой offer, данные:", data);
-        return;
-      }
+      statusDiv.innerHTML = '<span class="waiting">⏳ Создание пары...</span>';
+    }
 
-      if (!offer.sdp) {
-        log("❌ Offer без SDP!");
-        log("❌ Offer: " + JSON.stringify(offer));
-        console.error("❌ Offer без SDP:", offer);
-        return;
+    // Подтверждение разрыва пары
+    function confirmBreakPair() {
+      if (confirm("Вы уверены что хотите разорвать пару? Придется вводить новый код от камеры.")) {
+        socket.emit("break-pair");
       }
+    }
 
-      log("✅ Offer валидный, тип: " + offer.type + ", длина SDP: " + offer.sdp.length);
+    // Переключение микрофона
+    async function toggleMicrophone() {
+      if (!isMicActive) {
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            } 
+          });
+          
+          if (peerConnection) {
+            localStream.getAudioTracks().forEach(track => {
+              peerConnection.addTrack(track, localStream);
+            });
+            
+            // Renegotiate
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit("offer", { 
+              offer: { type: offer.type, sdp: offer.sdp },
+              target: pairedWith
+            });
+          }
+          
+          isMicActive = true;
+          micButton.classList.add('active');
+          micButton.innerHTML = '🔴 Говорю...';
+          log("✅ Микрофон включен");
+          
+        } catch (err) {
+          log("❌ Ошибка микрофона: " + err.message);
+          alert("Не удалось получить доступ к микрофону");
+        }
+      } else {
+        if (localStream) {
+          localStream.getTracks().forEach(track => track.stop());
+          localStream = null;
+        }
+        
+        isMicActive = false;
+        micButton.classList.remove('active');
+        micButton.innerHTML = '🎤 Говорить';
+        log("🔇 Микрофон выключен");
+      }
+    }
+
+    // Вкл/выкл звука
+    function toggleMute() {
+      video.muted = !video.muted;
+      if (video.muted) {
+        muteIcon.textContent = '🔇';
+        muteText.textContent = 'Без звука';
+      } else {
+        muteIcon.textContent = '🔊';
+        muteText.textContent = 'Звук';
+      }
+    }
+
+    // Отключение
+    function disconnect() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      
+      video.srcObject = null;
+      
+      viewerScreen.classList.add('hidden');
+      checkScreen.classList.remove('hidden');
+      
+      isMicActive = false;
+      micButton.classList.remove('active');
+      micButton.innerHTML = '🎤 Говорить';
+      
+      log("❌ Отключено");
+      
+      // Через секунду проверяем пару снова
+      setTimeout(() => {
+        if (loadSavedPair()) {
+          socket.emit("restore-connection", { pairedWith });
+        } else {
+          showCodeScreen();
+        }
+      }, 1000);
+    }
+
+    // Создание WebRTC соединения
+    async function createPeerConnection(targetId) {
+      peerConnection = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
+
+      peerConnection.ontrack = e => {
+        log("📺 Трек получен: " + e.track.kind);
+        if (e.track.kind === 'video') {
+          video.srcObject = e.streams[0];
+          statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
+        }
+      };
+
+      peerConnection.onicecandidate = e => {
+        if (e.candidate) {
+          socket.emit("ice-candidate", { 
+            candidate: {
+              candidate: e.candidate.candidate,
+              sdpMLineIndex: e.candidate.sdpMLineIndex,
+              sdpMid: e.candidate.sdpMid
+            }, 
+            target: targetId 
+          });
+        }
+      };
+
+      peerConnection.oniceconnectionstatechange = () => {
+        log("🔗 ICE: " + peerConnection.iceConnectionState);
+        if (peerConnection.iceConnectionState === 'failed') {
+          statusDiv.innerHTML = '<span class="disconnected">❌ Соединение не удалось</span>';
+        }
+      };
+    }
+
+    // Socket события
+    socket.on("paired", async ({ pairedWith: cameraId, roomId: room }) => {
+      pairedWith = cameraId;
+      roomId = room;
+      
+      savePair(cameraId);
+      
+      pairIdSpan.textContent = cameraId.substring(0, 8);
+      
+      codeScreen.classList.add('hidden');
+      checkScreen.classList.add('hidden');
+      viewerScreen.classList.remove('hidden');
+      
+      statusDiv.innerHTML = '<span class="connected">✅ Пара создана! Ожидание камеры...</span>';
+      log("✅ Пара создана с: " + cameraId);
+      
+      await createPeerConnection(cameraId);
+    });
+
+    socket.on("connection-restored", async ({ pairedWith: cameraId, roomId: room }) => {
+      pairedWith = cameraId;
+      roomId = room;
+      
+      pairIdSpan.textContent = cameraId.substring(0, 8);
+      
+      checkScreen.classList.add('hidden');
+      codeScreen.classList.add('hidden');
+      viewerScreen.classList.remove('hidden');
+      
+      statusDiv.innerHTML = '<span class="connected">✅ Соединение восстановлено</span>';
+      log("✅ Соединение восстановлено с: " + cameraId);
+      
+      await createPeerConnection(cameraId);
+    });
+
+    socket.on("partner-online", () => {
+      statusDiv.innerHTML = '<span class="connected">✅ Камера онлайн</span>';
+      log("📹 Камера подключилась");
+    });
+
+    socket.on("partner-offline", () => {
+      statusDiv.innerHTML = '<span class="disconnected">📴 Камера офлайн</span>';
+      log("📴 Камера отключилась");
+    });
+
+    socket.on("offer", async ({ offer }) => {
+      log("📥 Offer получен");
+      
+      if (!peerConnection) {
+        await createPeerConnection(pairedWith);
+      }
 
       try {
-        // Создаём PeerConnection
-        log("🔄 Создаю PeerConnection");
-        peer = new RTCPeerConnection({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        });
-
-        // Получаем видео трек
-        peer.ontrack = e => {
-          log("📺 Видео трек получен! Streams: " + e.streams.length);
-          const stream = e.streams[0];
-          video.srcObject = stream;
-          
-          log("📹 Stream ID: " + stream.id);
-          log("📹 Треков в stream: " + stream.getTracks().length);
-          stream.getTracks().forEach(track => {
-            log("📹 Track: " + track.kind + ", enabled: " + track.enabled + ", readyState: " + track.readyState);
-          });
-          
-          // Пытаемся запустить видео
-          video.play().then(() => {
-            log("✅ Видео воспроизводится!");
-            statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
-          }).catch(err => {
-            log("❌ Ошибка воспроизведения: " + err.message);
-            statusDiv.innerHTML = '<span class="disconnected">❌ Ошибка воспроизведения видео</span>';
-          });
-        };
-
-        // Отправляем ICE кандидаты
-        peer.onicecandidate = e => {
-          if (e.candidate) {
-            iceSentCount++;
-            log(`🧊 ICE кандидат #${iceSentCount} отправлен камере`);
-            socket.emit("ice-candidate", { 
-              candidate: {
-                candidate: e.candidate.candidate,
-                sdpMLineIndex: e.candidate.sdpMLineIndex,
-                sdpMid: e.candidate.sdpMid
-              }, 
-              target 
-            });
-          } else {
-            log(`✅ Все ICE кандидаты собраны (всего отправлено: ${iceSentCount})`);
-          }
-        };
-
-        peer.oniceconnectionstatechange = () => {
-          log("🔗 ICE состояние: " + peer.iceConnectionState);
-          if (peer.iceConnectionState === 'connected') {
-            statusDiv.innerHTML = '<span class="connected">✅ Соединение установлено</span>';
-          } else if (peer.iceConnectionState === 'failed') {
-            log("❌ ICE соединение не удалось");
-            statusDiv.innerHTML = '<span class="disconnected">❌ Соединение не удалось</span>';
-          } else if (peer.iceConnectionState === 'disconnected') {
-            log("⚠️ ICE соединение разорвано");
-            statusDiv.innerHTML = '<span class="disconnected">⚠️ Соединение потеряно</span>';
-          }
-        };
-
-        peer.onconnectionstatechange = () => {
-          log("🔗 Connection состояние: " + peer.connectionState);
-        };
-
-        peer.onicegatheringstatechange = () => {
-          log("🧊 ICE gathering состояние: " + peer.iceGatheringState);
-        };
-
-        // Устанавливаем remote description
-        log("🔄 Устанавливаю remote description");
-        await peer.setRemoteDescription(new RTCSessionDescription(offer));
-        log("✅ Remote description установлен");
-
-        // Обрабатываем накопленные ICE candidates
-        if (iceCandidatesQueue.length > 0) {
-          log(`📦 Обрабатываю ${iceCandidatesQueue.length} накопленных ICE candidates`);
-          for (const candidate of iceCandidatesQueue) {
-            try {
-              await peer.addIceCandidate(new RTCIceCandidate(candidate));
-              log("✅ Накопленный ICE candidate добавлен");
-            } catch (err) {
-              log("❌ Ошибка добавления накопленного ICE: " + err.message);
-            }
-          }
-          iceCandidatesQueue = [];
-        }
-
-        // Создаём answer
-        log("🔄 Создаю answer");
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        
-        log("✅ Answer создан, тип: " + answer.type + ", длина SDP: " + answer.sdp.length);
-        log("📡 Отправляю answer камере, target: " + target);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
         
         socket.emit("answer", { 
-          answer: {
-            type: answer.type,
-            sdp: answer.sdp
-          }, 
-          target 
+          answer: { type: answer.type, sdp: answer.sdp }, 
+          target: pairedWith 
         });
+        
         log("✅ Answer отправлен");
-
-        statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание видео...</span>';
       } catch (err) {
         log("❌ Ошибка WebRTC: " + err.message);
-        console.error("❌ Ошибка WebRTC:", err);
-        statusDiv.innerHTML = '<span class="disconnected">❌ Ошибка соединения</span>';
       }
     });
 
-    socket.on("ice-candidate", async ({ candidate, target }) => {
-      iceReceivedCount++;
-      log(`🧊 ICE кандидат #${iceReceivedCount} получен от камеры`);
-      
-      if (!candidate) {
-        log("❌ candidate пустой");
-        return;
-      }
-
-      // Если peer еще не создан или remote description не установлен, добавляем в очередь
-      if (!peer || !peer.remoteDescription) {
-        log(`📦 Peer не готов, добавляю candidate #${iceReceivedCount} в очередь (всего в очереди: ${iceCandidatesQueue.length + 1})`);
-        iceCandidatesQueue.push(candidate);
-        return;
-      }
-      
-      // Иначе сразу добавляем
-      try {
-        await peer.addIceCandidate(new RTCIceCandidate(candidate));
-        log(`✅ ICE кандидат #${iceReceivedCount} добавлен`);
-      } catch (err) {
-        log("❌ Ошибка ICE: " + err.message);
-        console.error("Ошибка ICE:", err);
-      }
-    });
-
-    socket.on("camera-disconnected", () => {
-      log("❌ Камера отключилась");
-      statusDiv.innerHTML = '<span class="disconnected">❌ Камера отключена</span>';
-      video.srcObject = null;
-      if (peer) {
-        peer.close();
-        peer = null;
-      }
-    });
-
-    socket.on("error", (error) => {
-      log("❌ Ошибка сокета: " + JSON.stringify(error));
-      console.error("Socket error:", error);
-    });
-
-    // Отладка: слушаем все события
-    socket.onAny((eventName, ...args) => {
-      log("📨 Событие получено: " + eventName);
-      if (eventName === "offer") {
-        log("📊 Offer args length: " + args.length);
-        if (args[0]) {
-          log("📊 Offer args[0] keys: " + Object.keys(args[0]).join(", "));
+    socket.on("ice-candidate", async ({ candidate }) => {
+      if (peerConnection && candidate) {
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          log("❌ Ошибка ICE: " + err.message);
         }
       }
     });
+
+    socket.on("pair-broken", () => {
+      alert("Пара разорвана камерой.");
+      clearPair();
+      disconnect();
+    });
+
+    socket.on("error", (msg) => {
+      log("❌ Ошибка: " + msg);
+      alert(msg);
+      
+      if (msg.includes("не найдена") || msg.includes("истек")) {
+        clearPair();
+        disconnect();
+      }
+    });
+
+    video.onloadedmetadata = () => {
+      log("📹 Видео: " + video.videoWidth + "x" + video.videoHeight);
+    };
   </script>
 </body>
 </html>
