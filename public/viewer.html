@@ -5,48 +5,166 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Просмотр камеры</title>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #1a1a1a;
+      color: white;
+    }
+    video {
+      width: 100%;
+      max-width: 640px;
+      border: 2px solid #2196F3;
+      border-radius: 8px;
+      background: black;
+    }
+    .status {
+      margin: 10px 0;
+      padding: 10px;
+      background: #333;
+      border-radius: 5px;
+    }
+    .connected { color: #4CAF50; }
+    .disconnected { color: #f44336; }
+    .waiting { color: #FFC107; }
+  </style>
 </head>
 <body>
-  <h1>Просмотр камеры</h1>
+  <h1>👁 Просмотр камеры</h1>
+  <div class="status" id="status">Подключение к серверу...</div>
   <video id="remoteVideo" autoplay playsinline></video>
+  <div id="log"></div>
 
   <script>
     const socket = io("https://webrtc-camera-server.onrender.com");
     const roomId = "room1";
     const video = document.getElementById("remoteVideo");
+    const statusDiv = document.getElementById("status");
+    const logDiv = document.getElementById("log");
     let peer;
 
-    socket.emit("join-room", { roomId, role: "viewer" });
+    function log(msg) {
+      console.log(msg);
+      const time = new Date().toLocaleTimeString();
+      logDiv.innerHTML = `<div style="color: #888; font-size: 12px;">[${time}] ${msg}</div>` + logDiv.innerHTML;
+    }
+
+    socket.on("connect", () => {
+      log("✅ Подключено к серверу");
+      statusDiv.innerHTML = '<span class="connected">✅ Подключено к серверу</span>';
+      socket.emit("join-room", { roomId, role: "viewer" });
+      log("📡 Присоединился к комнате: " + roomId);
+      statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание камеры...</span>';
+    });
+
+    socket.on("disconnect", () => {
+      log("❌ Отключено от сервера");
+      statusDiv.innerHTML = '<span class="disconnected">❌ Отключено от сервера</span>';
+    });
 
     socket.on("offer", async ({ offer, target }) => {
+      log("📥 Offer получен от камеры");
+      
       if (!offer) {
+        log("❌ Получен пустой offer");
         console.error("❌ Получен пустой offer");
         return;
       }
 
-      peer = new RTCPeerConnection();
+      try {
+        // Создаём PeerConnection
+        peer = new RTCPeerConnection({
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        });
 
-      peer.ontrack = e => {
-        video.srcObject = e.streams[0];
-      };
+        // Получаем видео трек
+        peer.ontrack = e => {
+          log("📺 Видео трек получен");
+          video.srcObject = e.streams[0];
+          statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
+        };
 
-      peer.onicecandidate = e => {
-        if (e.candidate) {
-          socket.emit("ice-candidate", { candidate: e.candidate, target });
+        // Отправляем ICE кандидаты
+        peer.onicecandidate = e => {
+          if (e.candidate) {
+            log("🧊 ICE кандидат отправлен камере");
+            socket.emit("ice-candidate", { 
+              candidate: {
+                candidate: e.candidate.candidate,
+                sdpMLineIndex: e.candidate.sdpMLineIndex,
+                sdpMid: e.candidate.sdpMid
+              }, 
+              target 
+            });
+          }
+        };
+
+        peer.oniceconnectionstatechange = () => {
+          log("🔗 ICE состояние: " + peer.iceConnectionState);
+          if (peer.iceConnectionState === 'failed') {
+            log("❌ ICE соединение не удалось");
+            statusDiv.innerHTML = '<span class="disconnected">❌ Соединение не удалось</span>';
+          }
+        };
+
+        // Устанавливаем remote description
+        await peer.setRemoteDescription(new RTCSessionDescription(offer));
+        log("✅ Remote description установлен");
+
+        // Создаём answer
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        
+        log("📡 Answer создан и отправлен камере");
+        socket.emit("answer", { 
+          answer: {
+            type: answer.type,
+            sdp: answer.sdp
+          }, 
+          target 
+        });
+
+        statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание видео...</span>';
+      } catch (err) {
+        log("❌ Ошибка WebRTC: " + err.message);
+        console.error("❌ Ошибка WebRTC:", err);
+        statusDiv.innerHTML = '<span class="disconnected">❌ Ошибка соединения</span>';
+      }
+    });
+
+    // ВАЖНО: Обрабатываем ICE кандидаты от камеры
+    socket.on("ice-candidate", async ({ candidate, target }) => {
+      log("🧊 ICE кандидат получен от камеры");
+      
+      if (peer && candidate) {
+        try {
+          await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          log("✅ ICE кандидат добавлен");
+        } catch (err) {
+          log("❌ Ошибка ICE: " + err.message);
+          console.error("Ошибка ICE:", err);
         }
-      };
-
-      await peer.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      socket.emit("answer", { answer, target });
-
-      console.log("✅ Answer отправлен камере");
+      }
     });
 
     socket.on("camera-disconnected", () => {
-      console.log("❌ Камера отключилась");
+      log("❌ Камера отключилась");
+      statusDiv.innerHTML = '<span class="disconnected">❌ Камера отключена</span>';
       video.srcObject = null;
+      if (peer) {
+        peer.close();
+        peer = null;
+      }
+    });
+
+    // Обработка ошибок сокета
+    socket.on("error", (error) => {
+      log("❌ Ошибка сокета: " + error);
+      console.error("Socket error:", error);
     });
   </script>
 </body>

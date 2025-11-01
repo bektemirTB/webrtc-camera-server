@@ -5,77 +5,170 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Камера</title>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #1a1a1a;
+      color: white;
+    }
+    video {
+      width: 100%;
+      max-width: 640px;
+      border: 2px solid #4CAF50;
+      border-radius: 8px;
+      background: black;
+    }
+    .status {
+      margin: 10px 0;
+      padding: 10px;
+      background: #333;
+      border-radius: 5px;
+    }
+    .connected { color: #4CAF50; }
+    .disconnected { color: #f44336; }
+  </style>
 </head>
 <body>
-  <h1>Камера</h1>
+  <h1>📹 Камера видеонаблюдения</h1>
+  <div class="status" id="status">Подключение к серверу...</div>
   <video id="localVideo" autoplay playsinline muted></video>
+  <div id="log"></div>
 
   <script>
     const socket = io("https://webrtc-camera-server.onrender.com");
     const roomId = "room1";
     const video = document.getElementById("localVideo");
+    const statusDiv = document.getElementById("status");
+    const logDiv = document.getElementById("log");
     let stream;
-    const peerConnections = {}; // Сохраняем PeerConnection для каждого зрителя
+    const peerConnections = {};
 
-    socket.emit("join-room", { roomId, role: "camera" });
+    function log(msg) {
+      console.log(msg);
+      const time = new Date().toLocaleTimeString();
+      logDiv.innerHTML = `<div style="color: #888; font-size: 12px;">[${time}] ${msg}</div>` + logDiv.innerHTML;
+    }
+
+    socket.on("connect", () => {
+      log("✅ Подключено к серверу");
+      statusDiv.innerHTML = '<span class="connected">✅ Подключено к серверу</span>';
+      socket.emit("join-room", { roomId, role: "camera" });
+      log("📡 Присоединился к комнате: " + roomId);
+    });
+
+    socket.on("disconnect", () => {
+      log("❌ Отключено от сервера");
+      statusDiv.innerHTML = '<span class="disconnected">❌ Отключено от сервера</span>';
+    });
 
     // Когда появляется новый зритель
     socket.on("viewer-ready", async (viewerId) => {
-      console.log("👁 Зритель подключился:", viewerId);
+      log("👁 Зритель подключился: " + viewerId);
+      statusDiv.innerHTML = '<span class="connected">👁 Зритель смотрит</span>';
 
       // Получаем доступ к камере только один раз
       if (!stream) {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          log("📷 Запрашиваю доступ к камере...");
+          stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { width: 1280, height: 720 }, 
+            audio: false 
+          });
           video.srcObject = stream;
+          log("✅ Камера активирована");
         } catch (err) {
+          log("❌ Ошибка доступа к камере: " + err.message);
           console.error("Ошибка доступа к камере:", err);
           return;
         }
       }
 
       // Создаём PeerConnection для этого зрителя
-      const pc = new RTCPeerConnection();
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
 
+      // Добавляем треки
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
+        log("➕ Трек добавлен: " + track.kind);
+      });
+
+      // ICE кандидаты
       pc.onicecandidate = e => {
         if (e.candidate) {
-          socket.emit("ice-candidate", { candidate: e.candidate, target: viewerId });
+          log("🧊 ICE кандидат отправлен зрителю");
+          socket.emit("ice-candidate", { 
+            candidate: {
+              candidate: e.candidate.candidate,
+              sdpMLineIndex: e.candidate.sdpMLineIndex,
+              sdpMid: e.candidate.sdpMid
+            }, 
+            target: viewerId 
+          });
         }
       };
 
-      // Создаём offer и отправляем только plain object
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      pc.oniceconnectionstatechange = () => {
+        log("🔗 ICE состояние: " + pc.iceConnectionState);
+        if (pc.iceConnectionState === 'connected') {
+          statusDiv.innerHTML = '<span class="connected">✅ Видео передается зрителю</span>';
+        }
+      };
 
-      console.log("📡 Offer отправлен зрителю:", viewerId);
-      socket.emit("offer", { 
-        offer: { type: offer.type, sdp: offer.sdp }, 
-        target: viewerId 
-      });
+      // Создаём offer
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
 
-      peerConnections[viewerId] = pc;
+        log("📡 Offer создан и отправлен зрителю");
+        socket.emit("offer", { 
+          offer: { 
+            type: offer.type, 
+            sdp: offer.sdp 
+          }, 
+          target: viewerId 
+        });
+
+        peerConnections[viewerId] = pc;
+      } catch (err) {
+        log("❌ Ошибка создания offer: " + err.message);
+        console.error("Ошибка создания offer:", err);
+      }
     });
 
-    // Получаем answer от зрителя и тоже сохраняем только plain object
+    // Получаем answer от зрителя
     socket.on("answer", async ({ answer, target }) => {
+      log("📥 Answer получен от зрителя");
       const pc = peerConnections[target];
       if (pc && answer) {
-        await pc.setRemoteDescription(new RTCSessionDescription({
-          type: answer.type,
-          sdp: answer.sdp
-        }));
-        console.log("✅ Answer получен от зрителя:", target);
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription({
+            type: answer.type,
+            sdp: answer.sdp
+          }));
+          log("✅ Answer установлен");
+        } catch (err) {
+          log("❌ Ошибка установки answer: " + err.message);
+          console.error("Ошибка установки answer:", err);
+        }
       }
     });
 
     // Получаем ICE кандидаты от зрителя
     socket.on("ice-candidate", async ({ candidate, target }) => {
+      log("🧊 ICE кандидат получен от зрителя");
       const pc = peerConnections[target];
       if (pc && candidate) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          log("✅ ICE кандидат добавлен");
         } catch (err) {
+          log("❌ Ошибка ICE: " + err.message);
           console.error("Ошибка ICE:", err);
         }
       }
@@ -83,16 +176,25 @@
 
     // Отключаем камеру, если зрителей нет
     socket.on("camera-stop", () => {
-      console.log("🛑 Зрителей нет — камера выключается");
+      log("🛑 Зрителей нет — камера выключается");
+      statusDiv.innerHTML = '<span class="disconnected">⏸ Нет зрителей</span>';
+      
       for (const id in peerConnections) {
         peerConnections[id].close();
         delete peerConnections[id];
       }
+      
       if (stream) {
         stream.getTracks().forEach(t => t.stop());
         stream = null;
         video.srcObject = null;
       }
+    });
+
+    // Обработка ошибок сокета
+    socket.on("error", (error) => {
+      log("❌ Ошибка сокета: " + error);
+      console.error("Socket error:", error);
     });
   </script>
 </body>
