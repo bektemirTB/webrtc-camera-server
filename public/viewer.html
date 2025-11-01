@@ -11,39 +11,98 @@
   <video id="remoteVideo" autoplay playsinline></video>
 
   <script>
-    const socket = io("https://webrtc-camera-server.onrender.com");
-    const roomId = "room1";
-    const video = document.getElementById("remoteVideo");
-    let peer;
+const socket = io("https://webrtc-camera-server.onrender.com");
+const roomId = "room1";
+const video = document.getElementById("localVideo");
+let stream;
+const peerConnections = {}; // Храним соединения по viewerId
 
-    socket.emit("join-room", { roomId, role: "viewer" });
+socket.emit("join-room", { roomId, role: "camera" });
 
-    socket.on("offer", async (offer) => {
-      console.log("📡 Получен offer от камеры");
+socket.on("viewer-ready", async (viewerId) => {
+  console.log("👁 Зритель подключился:", viewerId);
 
-      peer = new RTCPeerConnection();
+  if (!stream) {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    video.srcObject = stream;
+  }
 
-      peer.ontrack = e => {
-        console.log("🎥 Видео получено");
-        video.srcObject = e.streams[0];
-      };
+  const pc = new RTCPeerConnection();
+  stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      peer.onicecandidate = e => {
-        if (e.candidate) {
-          socket.emit("ice-candidate", { roomId, candidate: e.candidate });
-        }
-      };
+  pc.onicecandidate = e => {
+    if (e.candidate) {
+      socket.emit("ice-candidate", { candidate: e.candidate, target: viewerId });
+    }
+  };
 
-      await peer.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      socket.emit("answer", { roomId, answer });
-    });
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit("offer", { offer, target: viewerId });
 
-    socket.on("camera-disconnected", () => {
-      console.log("❌ Камера отключилась");
-      video.srcObject = null;
-    });
-  </script>
+  peerConnections[viewerId] = pc;
+});
+
+socket.on("answer", async ({ answer, target }) => {
+  const pc = peerConnections[target];
+  if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
+});
+
+socket.on("ice-candidate", async ({ candidate, target }) => {
+  const pc = peerConnections[target];
+  if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
+});
+
+socket.on("camera-stop", () => {
+  console.log("🛑 Зрителей нет — камера выключается");
+  for (const id in peerConnections) {
+    peerConnections[id].close();
+    delete peerConnections[id];
+  }
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    video.srcObject = null;
+  }
+});
+</script>
+🔹 Исправленный viewer.html
+html
+Копировать код
+<script>
+const socket = io("https://webrtc-camera-server.onrender.com");
+const roomId = "room1";
+const video = document.getElementById("remoteVideo");
+let peer;
+
+socket.emit("join-room", { roomId, role: "viewer" });
+
+socket.on("offer", async ({ offer, target }) => {
+  console.log("📡 Получен offer от камеры");
+
+  peer = new RTCPeerConnection();
+
+  peer.ontrack = e => {
+    console.log("🎥 Видео получено");
+    video.srcObject = e.streams[0];
+  };
+
+  peer.onicecandidate = e => {
+    if (e.candidate) {
+      socket.emit("ice-candidate", { candidate: e.candidate, target });
+    }
+  };
+
+  await peer.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await peer.createAnswer();
+  await peer.setLocalDescription(answer);
+  socket.emit("answer", { answer, target });
+});
+
+socket.on("camera-disconnected", () => {
+  console.log("❌ Камера отключилась");
+  video.srcObject = null;
+});
+</script>
 </body>
 </html>
