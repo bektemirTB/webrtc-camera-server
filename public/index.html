@@ -11,62 +11,75 @@
   <video id="localVideo" autoplay playsinline muted></video>
 
   <script>
-const socket = io("https://webrtc-camera-server.onrender.com");
-const roomId = "room1";
-const video = document.getElementById("localVideo");
-let stream;
-const peerConnections = {}; // Храним соединения по viewerId
+    const socket = io("https://webrtc-camera-server.onrender.com");
+    const roomId = "room1";
+    const video = document.getElementById("localVideo");
+    let stream;
+    const peerConnections = {}; // Сохраняем PeerConnection для каждого зрителя
 
-socket.emit("join-room", { roomId, role: "camera" });
+    socket.emit("join-room", { roomId, role: "camera" });
 
-socket.on("viewer-ready", async (viewerId) => {
-  console.log("👁 Зритель подключился:", viewerId);
+    socket.on("viewer-ready", async (viewerId) => {
+      console.log("👁 Зритель подключился:", viewerId);
 
-  if (!stream) {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    video.srcObject = stream;
-  }
+      if (!stream) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          video.srcObject = stream;
+        } catch (err) {
+          console.error("Ошибка доступа к камере:", err);
+          return;
+        }
+      }
 
-  const pc = new RTCPeerConnection();
-  stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      const pc = new RTCPeerConnection();
 
-  pc.onicecandidate = e => {
-    if (e.candidate) {
-      socket.emit("ice-candidate", { candidate: e.candidate, target: viewerId });
-    }
-  };
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  socket.emit("offer", { offer, target: viewerId });
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          socket.emit("ice-candidate", { candidate: e.candidate, target: viewerId });
+        }
+      };
 
-  peerConnections[viewerId] = pc;
-});
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
 
-socket.on("answer", async ({ answer, target }) => {
-  const pc = peerConnections[target];
-  if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
-});
+      socket.emit("offer", { offer, target: viewerId });
 
-socket.on("ice-candidate", async ({ candidate, target }) => {
-  const pc = peerConnections[target];
-  if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
-});
+      peerConnections[viewerId] = pc;
+    });
 
-socket.on("camera-stop", () => {
-  console.log("🛑 Зрителей нет — камера выключается");
-  for (const id in peerConnections) {
-    peerConnections[id].close();
-    delete peerConnections[id];
-  }
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop());
-    stream = null;
-    video.srcObject = null;
-  }
-});
-</script>
+    socket.on("answer", async ({ answer, target }) => {
+      const pc = peerConnections[target];
+      if (pc && answer) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    });
 
+    socket.on("ice-candidate", async ({ candidate, target }) => {
+      const pc = peerConnections[target];
+      if (pc && candidate) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.error("Ошибка ICE:", err);
+        }
+      }
+    });
 
+    socket.on("camera-stop", () => {
+      console.log("🛑 Зрителей нет — камера выключается");
+      for (const id in peerConnections) {
+        peerConnections[id].close();
+        delete peerConnections[id];
+      }
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        video.srcObject = null;
+      }
+    });
+  </script>
 </body>
 </html>

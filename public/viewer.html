@@ -11,40 +11,41 @@
   <video id="remoteVideo" autoplay playsinline></video>
 
   <script>
-const socket = io("https://webrtc-camera-server.onrender.com");
-const roomId = "room1";
-const video = document.getElementById("remoteVideo");
-let peer;
+    const socket = io("https://webrtc-camera-server.onrender.com");
+    const roomId = "room1";
+    const video = document.getElementById("remoteVideo");
+    let peer;
 
-socket.emit("join-room", { roomId, role: "viewer" });
+    socket.emit("join-room", { roomId, role: "viewer" });
 
-socket.on("offer", async ({ offer, target }) => {
-  console.log("📡 Получен offer от камеры");
+    socket.on("offer", async ({ offer, target }) => {
+      if (!offer) {
+        console.error("❌ Получен пустой offer");
+        return;
+      }
 
-  peer = new RTCPeerConnection();
+      peer = new RTCPeerConnection();
 
-  peer.ontrack = e => {
-    console.log("🎥 Видео получено");
-    video.srcObject = e.streams[0];
-  };
+      peer.ontrack = e => {
+        video.srcObject = e.streams[0];
+      };
 
-  peer.onicecandidate = e => {
-    if (e.candidate) {
-      socket.emit("ice-candidate", { candidate: e.candidate, target });
-    }
-  };
+      peer.onicecandidate = e => {
+        if (e.candidate) {
+          socket.emit("ice-candidate", { candidate: e.candidate, target });
+        }
+      };
 
-  await peer.setRemoteDescription(new RTCSessionDescription(offer));
-  const answer = await peer.createAnswer();
-  await peer.setLocalDescription(answer);
-  socket.emit("answer", { answer, target });
-});
+      await peer.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      socket.emit("answer", { answer, target });
+    });
 
-socket.on("camera-disconnected", () => {
-  console.log("❌ Камера отключилась");
-  video.srcObject = null;
-});
-</script>
-
+    socket.on("camera-disconnected", () => {
+      console.log("❌ Камера отключилась");
+      video.srcObject = null;
+    });
+  </script>
 </body>
 </html>
