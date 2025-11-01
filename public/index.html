@@ -44,20 +44,27 @@
         }
       };
 
+      // Создаём offer и отправляем только plain object
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
       console.log("📡 Offer отправлен зрителю:", viewerId);
-      socket.emit("offer", { offer, target: viewerId });
+      socket.emit("offer", { 
+        offer: { type: offer.type, sdp: offer.sdp }, 
+        target: viewerId 
+      });
 
       peerConnections[viewerId] = pc;
     });
 
-    // Получаем answer от зрителя
+    // Получаем answer от зрителя и тоже сохраняем только plain object
     socket.on("answer", async ({ answer, target }) => {
       const pc = peerConnections[target];
       if (pc && answer) {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await pc.setRemoteDescription(new RTCSessionDescription({
+          type: answer.type,
+          sdp: answer.sdp
+        }));
         console.log("✅ Answer получен от зрителя:", target);
       }
     });
