@@ -8,86 +8,337 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-app.use(express.static(__dirname));
+app.use(express.static("public"));
 
-let codes = {}; 
-let pairs = {}; 
-let sockets = {};
+// Структура:
+// activeCodes: { "1234": { cameraId, expiresAt, viewerId: null } }
+// pairs: { cameraId: viewerId, viewerId: cameraId }
+// connections: { socketId: { roomId, role, paired, originalId } }
 
-function generateCode() {
-  return Math.floor(1000 + Math.random() * 9000).toString();
-}
+const activeCodes = {}; // Временные коды (5 минут)
+const pairs = {}; // Постоянные пары (по оригинальным ID, не socket ID)
+const connections = {}; // Текущие подключения
+const socketToOriginalId = {}; // Маппинг socket.id → original ID
+
+const CODE_LIFETIME = 5 * 60 * 1000; // 5 минут
 
 io.on("connection", (socket) => {
-  sockets[socket.id] = socket;
+  console.log("🔌 Подключился:", socket.id);
 
-  socket.on("generate-code", () => {
-    const code = generateCode();
-    const expires = Date.now() + 5 * 60 * 1000;
-
-    codes[code] = { cameraId: socket.id, expires };
-
-    socket.emit("code-generated", { code, expiresAt: expires });
+  // Регистрация с оригинальным ID (из localStorage)
+  socket.on("register", ({ originalId, role }) => {
+    socketToOriginalId[socket.id] = originalId;
+    connections[socket.id] = { originalId, role };
+    console.log(`📝 Зарегистрирован: ${socket.id} с original ID: ${originalId}, роль: ${role}`);
   });
 
-  socket.on("connect-with-code", ({ code }) => {
-    const entry = codes[code];
-
-    if (!entry || Date.now() > entry.expires) {
-      socket.emit("error", "Код истек или неверный");
+  // Генерация кода для камеры
+  socket.on("generate-code", ({ originalId }) => {
+    // Проверяем, есть ли у этой камеры уже пара
+    if (pairs[originalId]) {
+      socket.emit("error", "У вас уже есть активная пара. Разорвите её для создания новой.");
+      console.log(`❌ ${originalId} пытается создать код, но уже в паре`);
       return;
     }
 
-    const cameraId = entry.cameraId;
-    const viewerId = socket.id;
+    // Генерируем уникальный 4-значный код
+    let code;
+    do {
+      code = Math.floor(1000 + Math.random() * 9000).toString();
+    } while (activeCodes[code]);
 
-    delete codes[code];
+    // Сохраняем код на 5 минут
+    activeCodes[code] = {
+      cameraOriginalId: originalId,
+      cameraSocketId: socket.id,
+      expiresAt: Date.now() + CODE_LIFETIME,
+      viewerOriginalId: null
+    };
 
-    pairs[cameraId] = viewerId;
-    pairs[viewerId] = cameraId;
+    socket.emit("code-generated", { 
+      code, 
+      expiresAt: activeCodes[code].expiresAt 
+    });
+    
+    console.log(`🔑 Код ${code} создан для камеры ${originalId}, истекает через 5 минут`);
 
-    io.to(cameraId).emit("paired", { pairedWith: viewerId });
-    socket.emit("paired", { pairedWith: cameraId });
+    // Автоматическое удаление через 5 минут
+    setTimeout(() => {
+      if (activeCodes[code] && !activeCodes[code].viewerOriginalId) {
+        delete activeCodes[code];
+        socket.emit("code-expired");
+        console.log(`⏰ Код ${code} истек`);
+      }
+    }, CODE_LIFETIME);
   });
 
-  socket.on("restore-connection", ({ pairedWith }) => {
-    if (pairs[pairedWith] === socket.id) {
-      socket.emit("connection-restored", { pairedWith });
-      io.to(pairedWith).emit("partner-online");
+  // Подключение зрителя по коду
+  socket.on("connect-with-code", ({ code, originalId }) => {
+    console.log(`👁 Зритель ${originalId} пытается подключиться с кодом ${code}`);
+
+    // Проверяем существование кода
+    if (!activeCodes[code]) {
+      socket.emit("error", "Неверный код или срок действия истек");
+      console.log(`❌ Код ${code} не найден`);
+      return;
+    }
+
+    const codeData = activeCodes[code];
+
+    // Проверяем не истек ли код
+    if (Date.now() > codeData.expiresAt) {
+      delete activeCodes[code];
+      socket.emit("error", "Срок действия кода истек");
+      console.log(`❌ Код ${code} истек`);
+      return;
+    }
+
+    // Проверяем, не используется ли код уже
+    if (codeData.viewerOriginalId) {
+      socket.emit("error", "Этот код уже используется");
+      console.log(`❌ Код ${code} уже используется`);
+      return;
+    }
+
+    // Проверяем, нет ли у зрителя уже пары
+    if (pairs[originalId]) {
+      socket.emit("error", "У вас уже есть активная пара. Разорвите её для создания новой.");
+      console.log(`❌ Зритель ${originalId} уже в паре`);
+      return;
+    }
+
+    // Создаем постоянную пару (используем оригинальные ID)
+    const cameraOriginalId = codeData.cameraOriginalId;
+    pairs[cameraOriginalId] = originalId;
+    pairs[originalId] = cameraOriginalId;
+
+    // Удаляем использованный код
+    codeData.viewerOriginalId = originalId;
+    delete activeCodes[code];
+
+    // Создаем уникальную комнату для пары
+    const roomId = `pair_${cameraOriginalId}`;
+    socket.join(roomId);
+
+    // Уведомляем зрителя
+    socket.emit("paired", { 
+      pairedWith: cameraOriginalId, 
+      roomId,
+      role: "viewer",
+      cameraOnline: false // Камера пока не онлайн
+    });
+
+    // Уведомляем камеру (если она онлайн)
+    if (codeData.cameraSocketId) {
+      io.to(codeData.cameraSocketId).emit("paired", { 
+        pairedWith: originalId, 
+        roomId,
+        role: "camera"
+      });
+      
+      // Сообщаем зрителю что камера онлайн
+      socket.emit("camera-online");
+    }
+
+    console.log(`✅ Пара создана: камера ${cameraOriginalId} ↔ зритель ${originalId}`);
+    console.log(`📊 Всего пар: ${Object.keys(pairs).length / 2}`);
+  });
+
+  // Восстановление соединения для существующей пары
+  socket.on("restore-connection", ({ originalId, role }) => {
+    console.log(`🔄 ${originalId} (${role}) восстанавливает соединение`);
+
+    // Проверяем существование пары
+    const pairedWith = pairs[originalId];
+    if (!pairedWith) {
+      socket.emit("error", "Пара не найдена. Создайте новую пару.");
+      console.log(`❌ Пара не найдена для ${originalId}`);
+      return;
+    }
+
+    // Проверяем взаимность
+    if (pairs[pairedWith] !== originalId) {
+      socket.emit("error", "Пара повреждена. Разорвите её и создайте новую.");
+      console.log(`❌ Пара повреждена для ${originalId}`);
+      return;
+    }
+
+    const roomId = `pair_${role === "camera" ? originalId : pairedWith}`;
+    socket.join(roomId);
+
+    connections[socket.id] = { originalId, role, pairedWith };
+
+    socket.emit("connection-restored", { 
+      pairedWith, 
+      roomId,
+      role 
+    });
+
+    // Находим socket ID партнера
+    const partnerSocketId = Object.keys(connections).find(
+      sid => connections[sid].originalId === pairedWith
+    );
+
+    if (partnerSocketId) {
+      // Партнер онлайн
+      io.to(partnerSocketId).emit("partner-online", originalId);
+      
+      if (role === "viewer") {
+        socket.emit("camera-online");
+      } else {
+        socket.emit("viewer-online");
+      }
+      
+      console.log(`✅ Оба в паре онлайн: ${originalId} ↔ ${pairedWith}`);
     } else {
-      socket.emit("restore-wait");
+      // Партнер офлайн
+      if (role === "viewer") {
+        socket.emit("camera-offline");
+      } else {
+        socket.emit("viewer-offline");
+      }
+      console.log(`📴 Партнер ${pairedWith} офлайн`);
+    }
+
+    console.log(`✅ Соединение восстановлено: ${originalId} (${role}) ↔ ${pairedWith}`);
+  });
+
+  // Разрыв пары
+  socket.on("break-pair", ({ originalId }) => {
+    const pairedWith = pairs[originalId];
+    
+    if (!pairedWith) {
+      socket.emit("error", "У вас нет активной пары");
+      return;
+    }
+
+    console.log(`💔 Разрыв пары: ${originalId} ↔ ${pairedWith}`);
+
+    // Удаляем пару
+    delete pairs[originalId];
+    delete pairs[pairedWith];
+
+    // Находим socket ID партнера
+    const partnerSocketId = Object.keys(connections).find(
+      sid => connections[sid].originalId === pairedWith
+    );
+
+    // Уведомляем обоих
+    socket.emit("pair-broken");
+    if (partnerSocketId) {
+      io.to(partnerSocketId).emit("pair-broken");
+    }
+
+    console.log(`✅ Пара разорвана`);
+    console.log(`📊 Осталось пар: ${Object.keys(pairs).length / 2}`);
+  });
+
+  // WebRTC сигналинг (только для пар)
+  socket.on("offer", ({ offer, originalId }) => {
+    const conn = connections[socket.id];
+    if (!conn) return;
+
+    const pairedWith = pairs[conn.originalId];
+    if (!pairedWith) {
+      socket.emit("error", "Нет активной пары");
+      return;
+    }
+
+    // Находим socket ID партнера
+    const partnerSocketId = Object.keys(connections).find(
+      sid => connections[sid].originalId === pairedWith
+    );
+
+    if (partnerSocketId) {
+      console.log(`📥 Offer от ${conn.originalId} для ${pairedWith}`);
+      io.to(partnerSocketId).emit("offer", { offer, from: conn.originalId });
     }
   });
 
-  socket.on("offer", ({ offer, target }) => {
-    io.to(target).emit("offer", { offer });
-  });
+  socket.on("answer", ({ answer, originalId }) => {
+    const conn = connections[socket.id];
+    if (!conn) return;
 
-  socket.on("answer", ({ answer, target }) => {
-    io.to(target).emit("answer", { answer });
-  });
+    const pairedWith = pairs[conn.originalId];
+    if (!pairedWith) return;
 
-  socket.on("ice-candidate", ({ candidate, target }) => {
-    io.to(target).emit("ice-candidate", { candidate });
-  });
+    const partnerSocketId = Object.keys(connections).find(
+      sid => connections[sid].originalId === pairedWith
+    );
 
-  socket.on("break-pair", () => {
-    const partner = pairs[socket.id];
-    if (partner) {
-      io.to(partner).emit("pair-broken");
-      delete pairs[partner];
-      delete pairs[socket.id];
+    if (partnerSocketId) {
+      console.log(`📥 Answer от ${conn.originalId} для ${pairedWith}`);
+      io.to(partnerSocketId).emit("answer", { answer, from: conn.originalId });
     }
   });
 
+  socket.on("ice-candidate", ({ candidate, originalId }) => {
+    const conn = connections[socket.id];
+    if (!conn) return;
+
+    const pairedWith = pairs[conn.originalId];
+    if (!pairedWith) return;
+
+    const partnerSocketId = Object.keys(connections).find(
+      sid => connections[sid].originalId === pairedWith
+    );
+
+    if (partnerSocketId) {
+      io.to(partnerSocketId).emit("ice-candidate", { candidate, from: conn.originalId });
+    }
+  });
+
+  // Отключение
   socket.on("disconnect", () => {
-    const partner = pairs[socket.id];
-    if (partner) {
-      io.to(partner).emit("partner-offline");
+    console.log("❌ Отключился:", socket.id);
+
+    const conn = connections[socket.id];
+    if (conn && conn.originalId) {
+      const pairedWith = pairs[conn.originalId];
+      
+      if (pairedWith) {
+        // Находим socket ID партнера
+        const partnerSocketId = Object.keys(connections).find(
+          sid => connections[sid].originalId === pairedWith
+        );
+
+        if (partnerSocketId) {
+          if (conn.role === "camera") {
+            io.to(partnerSocketId).emit("camera-offline");
+          } else {
+            io.to(partnerSocketId).emit("viewer-offline");
+          }
+          console.log(`📴 ${conn.originalId} офлайн, партнер ${pairedWith} уведомлен`);
+        }
+      }
     }
-    delete pairs[socket.id];
-    delete sockets[socket.id];
+
+    delete socketToOriginalId[socket.id];
+    delete connections[socket.id];
+
+    // Удаляем неиспользованные коды этого сокета
+    Object.keys(activeCodes).forEach(code => {
+      if (activeCodes[code].cameraSocketId === socket.id && !activeCodes[code].viewerOriginalId) {
+        delete activeCodes[code];
+        console.log(`🗑 Удален неиспользованный код ${code}`);
+      }
+    });
   });
 });
 
-server.listen(3000, () => console.log("Server running"));
+// Очистка истекших кодов каждую минуту
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(activeCodes).forEach(code => {
+    if (now > activeCodes[code].expiresAt && !activeCodes[code].viewerOriginalId) {
+      delete activeCodes[code];
+      console.log(`🧹 Очищен истекший код ${code}`);
+    }
+  });
+}, 60000);
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+  console.log(`📊 Система парного подключения активна`);
+});
