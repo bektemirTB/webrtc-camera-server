@@ -425,8 +425,10 @@
     async function createPeerConnection() {
       if (peerConnection) {
         peerConnection.close();
+        log("🔌 Старое соединение закрыто");
       }
 
+      log("🔄 Создание нового PeerConnection");
       peerConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -435,15 +437,21 @@
       });
 
       peerConnection.ontrack = e => {
-        log("📺 Трек: " + e.track.kind);
+        log("📺 Трек получен: " + e.track.kind);
         if (e.track.kind === 'video') {
           video.srcObject = e.streams[0];
           statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
+          log("✅ Видео установлено");
+        } else if (e.track.kind === 'audio') {
+          log("🔊 Аудио трек получен от камеры");
         }
       };
 
+      let iceSentCount = 0;
       peerConnection.onicecandidate = e => {
         if (e.candidate) {
+          iceSentCount++;
+          log(`🧊 ICE candidate #${iceSentCount} отправлен камере`);
           socket.emit("ice-candidate", { 
             candidate: {
               candidate: e.candidate.candidate,
@@ -452,15 +460,32 @@
             }, 
             originalId: myOriginalId 
           });
+        } else {
+          log(`✅ Все ICE candidates собраны (отправлено: ${iceSentCount})`);
         }
       };
 
       peerConnection.oniceconnectionstatechange = () => {
         log("🔗 ICE: " + peerConnection.iceConnectionState);
-        if (peerConnection.iceConnectionState === 'failed') {
+        if (peerConnection.iceConnectionState === 'connected') {
+          statusDiv.innerHTML = '<span class="connected">✅ Видео воспроизводится</span>';
+        } else if (peerConnection.iceConnectionState === 'failed') {
           statusDiv.innerHTML = '<span class="disconnected">❌ Соединение не удалось</span>';
+          log("❌ ICE failed - возможно проблема с NAT/Firewall");
+        } else if (peerConnection.iceConnectionState === 'checking') {
+          statusDiv.innerHTML = '<span class="waiting">⏳ Проверка соединения...</span>';
         }
       };
+
+      peerConnection.onconnectionstatechange = () => {
+        log("🔗 Connection state: " + peerConnection.connectionState);
+      };
+
+      peerConnection.onicegatheringstatechange = () => {
+        log("🧊 ICE gathering: " + peerConnection.iceGatheringState);
+      };
+
+      log("✅ PeerConnection создан");
     }
 
     // Socket события
@@ -488,14 +513,14 @@
       if (cameraOnline) {
         cameraStatusDiv.innerHTML = '<span class="connected">✅ Камера онлайн</span>';
         isCameraOnline = true;
-        await createPeerConnection();
+        statusDiv.innerHTML = '<span class="waiting">⏳ Ожидаем видео от камеры...</span>';
+        log("✅ Пара создана, камера онлайн - ожидаем offer");
       } else {
         cameraStatusDiv.innerHTML = '<span class="disconnected">📴 Камера офлайн</span>';
         isCameraOnline = false;
         statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание камеры...</span>';
+        log("✅ Пара создана, камера офлайн");
       }
-      
-      log("✅ Пара создана: " + cameraId);
     });
 
     socket.on("connection-restored", async ({ pairedWith: cameraId }) => {
@@ -503,16 +528,18 @@
       
       showViewerScreen();
       cameraStatusDiv.innerHTML = '<span class="waiting">⏳ Проверка камеры...</span>';
+      statusDiv.innerHTML = '<span class="waiting">⏳ Ожидаем ответ от камеры...</span>';
       
-      log("✅ Пара восстановлена: " + cameraId);
+      log("✅ Пара восстановлена: " + cameraId + " - ожидаем статус камеры");
     });
 
     socket.on("camera-online", async () => {
       cameraStatusDiv.innerHTML = '<span class="connected">✅ Камера онлайн</span>';
       isCameraOnline = true;
-      log("📹 Камера онлайн");
+      statusDiv.innerHTML = '<span class="waiting">⏳ Устанавливаем соединение...</span>';
+      log("📹 Камера онлайн - ожидаем offer");
       
-      await createPeerConnection();
+      // НЕ создаем peerConnection здесь, ждем offer от камеры
     });
 
     socket.on("camera-offline", () => {

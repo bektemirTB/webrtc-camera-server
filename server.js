@@ -244,11 +244,15 @@ io.on("connection", (socket) => {
   // WebRTC сигналинг (только для пар)
   socket.on("offer", ({ offer, originalId }) => {
     const conn = connections[socket.id];
-    if (!conn) return;
+    if (!conn) {
+      console.log(`❌ Offer от ${socket.id} - нет в connections`);
+      return;
+    }
 
     const pairedWith = pairs[conn.originalId];
     if (!pairedWith) {
       socket.emit("error", "Нет активной пары");
+      console.log(`❌ Offer от ${conn.originalId} - нет пары`);
       return;
     }
 
@@ -258,25 +262,37 @@ io.on("connection", (socket) => {
     );
 
     if (partnerSocketId) {
-      console.log(`📥 Offer от ${conn.originalId} для ${pairedWith}`);
+      console.log(`📥 Offer от ${conn.originalId} (${conn.role}) для ${pairedWith}, SDP: ${offer?.sdp?.length || 0} bytes`);
       io.to(partnerSocketId).emit("offer", { offer, from: conn.originalId });
+      console.log(`✅ Offer переслан ${pairedWith} на socket ${partnerSocketId}`);
+    } else {
+      console.log(`❌ Партнер ${pairedWith} не найден онлайн для offer`);
     }
   });
 
   socket.on("answer", ({ answer, originalId }) => {
     const conn = connections[socket.id];
-    if (!conn) return;
+    if (!conn) {
+      console.log(`❌ Answer от ${socket.id} - нет в connections`);
+      return;
+    }
 
     const pairedWith = pairs[conn.originalId];
-    if (!pairedWith) return;
+    if (!pairedWith) {
+      console.log(`❌ Answer от ${conn.originalId} - нет пары`);
+      return;
+    }
 
     const partnerSocketId = Object.keys(connections).find(
       sid => connections[sid].originalId === pairedWith
     );
 
     if (partnerSocketId) {
-      console.log(`📥 Answer от ${conn.originalId} для ${pairedWith}`);
+      console.log(`📥 Answer от ${conn.originalId} (${conn.role}) для ${pairedWith}, SDP: ${answer?.sdp?.length || 0} bytes`);
       io.to(partnerSocketId).emit("answer", { answer, from: conn.originalId });
+      console.log(`✅ Answer переслан ${pairedWith} на socket ${partnerSocketId}`);
+    } else {
+      console.log(`❌ Партнер ${pairedWith} не найден онлайн для answer`);
     }
   });
 
@@ -292,6 +308,7 @@ io.on("connection", (socket) => {
     );
 
     if (partnerSocketId) {
+      console.log(`🧊 ICE от ${conn.originalId} для ${pairedWith}`);
       io.to(partnerSocketId).emit("ice-candidate", { candidate, from: conn.originalId });
     }
   });

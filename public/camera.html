@@ -448,8 +448,10 @@
     async function createPeerConnection() {
       if (peerConnection) {
         peerConnection.close();
+        log("🔌 Старое соединение закрыто");
       }
 
+      log("🔄 Создание нового PeerConnection");
       peerConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -460,18 +462,24 @@
       if (stream) {
         stream.getTracks().forEach(track => {
           peerConnection.addTrack(track, stream);
+          log("➕ Трек добавлен: " + track.kind);
         });
+      } else {
+        log("⚠️ Stream не существует при создании PeerConnection");
       }
 
       peerConnection.ontrack = e => {
         if (e.track.kind === 'audio') {
           remoteAudio.srcObject = e.streams[0];
-          log("🔊 Аудио от зрителя");
+          log("🔊 Аудио от зрителя подключено");
         }
       };
 
+      let iceSentCount = 0;
       peerConnection.onicecandidate = e => {
         if (e.candidate) {
+          iceSentCount++;
+          log(`🧊 ICE candidate #${iceSentCount} отправлен зрителю`);
           socket.emit("ice-candidate", { 
             candidate: {
               candidate: e.candidate.candidate,
@@ -480,6 +488,8 @@
             }, 
             originalId: myOriginalId 
           });
+        } else {
+          log(`✅ Все ICE candidates собраны (отправлено: ${iceSentCount})`);
         }
       };
 
@@ -489,21 +499,37 @@
           statusDiv.innerHTML = '<span class="connected">✅ Видео передается</span>';
         } else if (peerConnection.iceConnectionState === 'disconnected') {
           statusDiv.innerHTML = '<span class="disconnected">⚠️ Соединение потеряно</span>';
+        } else if (peerConnection.iceConnectionState === 'failed') {
+          log("❌ ICE failed");
+          statusDiv.innerHTML = '<span class="disconnected">❌ Соединение не удалось</span>';
+        } else if (peerConnection.iceConnectionState === 'checking') {
+          statusDiv.innerHTML = '<span class="waiting">⏳ Проверка соединения...</span>';
         }
       };
 
+      peerConnection.onconnectionstatechange = () => {
+        log("🔗 Connection state: " + peerConnection.connectionState);
+      };
+
+      peerConnection.onicegatheringstatechange = () => {
+        log("🧊 ICE gathering: " + peerConnection.iceGatheringState);
+      };
+
       try {
+        log("🔄 Создание offer...");
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         
+        log("✅ Offer создан, SDP length: " + offer.sdp.length);
         socket.emit("offer", { 
           offer: { type: offer.type, sdp: offer.sdp }, 
           originalId: myOriginalId 
         });
         
-        log("✅ Offer отправлен");
+        log("✅ Offer отправлен зрителю");
       } catch (err) {
         log("❌ Ошибка offer: " + err.message);
+        console.error(err);
       }
     }
 
@@ -538,12 +564,18 @@
       
       log("✅ Пара создана с: " + viewerId);
       
+      // Камера уже запущена (из checkPairAndStart), создаем соединение
       await createPeerConnection();
     });
 
     socket.on("connection-restored", async ({ pairedWith: viewerId }) => {
       pairedWith = viewerId;
       log("✅ Пара восстановлена: " + viewerId);
+      
+      // НЕ запускаем камеру сразу - ждем когда зритель появится
+      showCameraScreen();
+      viewerStatusDiv.innerHTML = '<span class="waiting">⏳ Проверка зрителя...</span>';
+      statusDiv.innerHTML = '<span class="waiting">⏳ Ожидание зрителя...</span>';
     });
 
     socket.on("viewer-online", async () => {
@@ -551,6 +583,12 @@
       isViewerOnline = true;
       log("👁 Зритель онлайн");
       
+      // Запускаем камеру если еще не запущена
+      if (!stream) {
+        await startCamera();
+      }
+      
+      // Создаем WebRTC соединение
       await createPeerConnection();
     });
 
