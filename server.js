@@ -210,7 +210,60 @@ io.on("connection", (socket) => {
 
     console.log(`✅ Соединение восстановлено: ${originalId} (${role}) ↔ ${pairedWith}`);
   });
+// ========================================
+  // НОВОЕ: Wake-Up функция для пробуждения камеры
+  // ========================================
+  socket.on("wake-up-camera", ({ originalId }) => {
+    console.log(`🔔 Wake-up запрос от ${originalId}`);
 
+    const conn = connections[socket.id];
+    if (!conn) {
+      socket.emit("error", "Не зарегистрирован в системе");
+      console.log(`❌ Wake-up от ${socket.id} - нет в connections`);
+      return;
+    }
+
+    // Проверяем роль - только зритель может будить камеру
+    if (conn.role !== "viewer") {
+      socket.emit("error", "Только зритель может будить камеру");
+      console.log(`❌ Wake-up от ${originalId} - не зритель (роль: ${conn.role})`);
+      return;
+    }
+
+    // Получаем ID парной камеры
+    const cameraOriginalId = pairs[originalId];
+    
+    if (!cameraOriginalId) {
+      socket.emit("error", "Нет активной пары с камерой");
+      console.log(`❌ Wake-up от ${originalId} - нет пары`);
+      return;
+    }
+
+    // Находим socket ID камеры
+    const cameraSocketId = Object.keys(connections).find(
+      sid => connections[sid].originalId === cameraOriginalId
+    );
+
+    if (!cameraSocketId) {
+      socket.emit("error", "Камера не подключена к серверу");
+      console.log(`❌ Wake-up: камера ${cameraOriginalId} не найдена онлайн`);
+      return;
+    }
+
+    // Отправляем wake-up сигнал камере
+    io.to(cameraSocketId).emit("wake-up-camera");
+    
+    console.log(`🔔 Wake-up сигнал отправлен от зрителя ${originalId} к камере ${cameraOriginalId} (socket: ${cameraSocketId})`);
+    
+    // Подтверждаем зрителю что сигнал отправлен
+    socket.emit("wake-up-sent", { 
+      cameraId: cameraOriginalId,
+      message: "Сигнал пробуждения отправлен камере" 
+    });
+  });
+  // ========================================
+  // КОНЕЦ: Wake-Up функция
+  // ========================================
   // Разрыв пары
   socket.on("break-pair", ({ originalId }) => {
     const pairedWith = pairs[originalId];
@@ -366,4 +419,5 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
   console.log(`📊 Система парного подключения активна`);
+  console.log(`🔔 Wake-up функция активирована`);  
 });
